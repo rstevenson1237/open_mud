@@ -1,0 +1,307 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── ENUMS ───────────────────────────────────────────────────────────────────
+
+enum UserType {
+  ROOT
+  ADMIN
+  POWER_USER
+  CHARACTER
+  GHOST
+  EXTENDED
+}
+
+enum PermissionLevel {
+  OWNED_BY
+  GRANTED
+  DENIED
+}
+
+enum OwnerType {
+  USER
+  AVATAR
+  LOCATION
+  REGION
+  WORLD
+  CONTAINER
+  ESCROW
+  EXTENDED
+}
+
+enum ObjectType {
+  ITEM
+  CONTAINER
+  WEAPON
+  ARMOR
+  KEY
+  CONSUMABLE
+  FIXTURE
+  MOB
+  COIN
+  VENDOR
+  EXTENDED
+}
+
+enum ZoneType {
+  SAFE
+  OPEN
+  DANGEROUS
+  EXTENDED
+}
+
+enum ConditionType {
+  MECHANICAL
+  GAME
+  EXTENDED
+}
+
+enum ScriptAttachType {
+  OBJECT_TEMPLATE
+  OBJECT_INSTANCE
+  LOCATION
+  EXIT
+  REGION
+  AVATAR
+  EXTENDED
+}
+
+// ─── USERS ───────────────────────────────────────────────────────────────────
+
+model User {
+  id            Int       @id
+  type          UserType  @default(CHARACTER)
+  username      String    @unique
+  passwordHash  String
+  sessionToken  String?
+  sessionExpiry DateTime?
+  aliases       Json      @default("{}")
+  inboxLimit    Int       @default(50)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  metadata      Json?
+
+  avatars       Avatar[]
+  messages      Message[]      @relation("ToUser")
+  sentMessages  Message[]      @relation("FromUser")
+  permissionLog PermissionLog[]
+}
+
+// ─── AVATARS ─────────────────────────────────────────────────────────────────
+
+model Avatar {
+  id                   Int      @id
+  userId               Int
+  name                 String
+  regionId             Int?
+  locationId           Int?
+  stats                Json     @default("{}")
+  skills               Json     @default("{}")
+  wounds               Int      @default(0)
+  stress               Int      @default(0)
+  hunger               Int      @default(0)
+  rest                 Int      @default(100)
+  carryCapacity        Int      @default(100)
+  encumberedThreshold  Int      @default(80)
+  activeConditions     Json     @default("[]")
+  aliases              Json     @default("{}")
+  isActive             Boolean  @default(false)
+  disconnectedAt       DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  metadata             Json?
+
+  user  User  @relation(fields: [userId], references: [id])
+}
+
+// ─── REGIONS ─────────────────────────────────────────────────────────────────
+
+model Region {
+  id          Int      @id
+  name        String
+  ownerUserId Int?
+  config      Json     @default("{}")
+  aliases     Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  metadata    Json?
+
+  locations   Location[]
+  exits       Exit[]
+}
+
+// ─── LOCATIONS ───────────────────────────────────────────────────────────────
+
+model Location {
+  id          Int
+  regionId    Int
+  name        String
+  description String   @default("")
+  zoneType    ZoneType @default(SAFE)
+  scriptId    Int?
+  aliases     Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  metadata    Json?
+
+  region  Region  @relation(fields: [regionId], references: [id])
+  exits   Exit[]  @relation("ExitFrom")
+
+  @@id([regionId, id])
+}
+
+// ─── EXITS ───────────────────────────────────────────────────────────────────
+
+model Exit {
+  id             Int
+  regionId       Int
+  fromLocationId Int
+  toLocationId   Int
+  direction      String
+  conditionId    Int?
+  aliases        Json     @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  metadata       Json?
+
+  region       Region   @relation(fields: [regionId], references: [id])
+  fromLocation Location @relation("ExitFrom", fields: [regionId, fromLocationId], references: [regionId, id])
+
+  @@id([regionId, id])
+}
+
+// ─── OBJECT TEMPLATES ────────────────────────────────────────────────────────
+
+model ObjectTemplate {
+  id         Int        @id
+  regionId   Int?
+  name       String
+  type       ObjectType
+  baseSchema Json       @default("{}")
+  scriptId   Int?
+  lootTable  Json       @default("[]")
+  aliases    Json       @default("{}")
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+  metadata   Json?
+
+  instances  ObjectInstance[]
+}
+
+// ─── OBJECT INSTANCES ────────────────────────────────────────────────────────
+
+model ObjectInstance {
+  pk               Int       @id @default(autoincrement())
+  id               Int
+  regionId         Int?
+  templateId       Int
+  ownerType        OwnerType
+  ownerId          String
+  state            Json      @default("{}")
+  isState          Json      @default("{}")
+  activeConditions Json      @default("[]")
+  count            Int?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  metadata         Json?
+
+  template  ObjectTemplate  @relation(fields: [templateId], references: [id])
+
+  @@unique([regionId, id])
+}
+
+// ─── PERMISSIONS ─────────────────────────────────────────────────────────────
+
+model Permission {
+  id          Int             @id @default(autoincrement())
+  subjectType String
+  subjectId   String
+  objectType  String
+  objectId    String
+  level       PermissionLevel
+  grantedBy   Int?
+  createdAt   DateTime        @default(now())
+  metadata    Json?
+
+}
+
+// ─── PERMISSION AUDIT LOG ────────────────────────────────────────────────────
+
+model PermissionLog {
+  id          Int      @id @default(autoincrement())
+  actorUserId Int
+  action      String
+  subjectType String
+  subjectId   String
+  objectType  String
+  objectId    String
+  level       String
+  timestamp   DateTime @default(now())
+  metadata    Json?
+
+  actor  User  @relation(fields: [actorUserId], references: [id])
+}
+
+// ─── SCRIPTS ─────────────────────────────────────────────────────────────────
+
+model Script {
+  id             Int              @id @default(autoincrement())
+  attachedToType ScriptAttachType
+  attachedToId   String
+  body           Json
+  maxTransitions Int?
+  maxEvents      Int?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  metadata       Json?
+}
+
+// ─── CONDITIONS ──────────────────────────────────────────────────────────────
+
+model Condition {
+  id                   Int           @id @default(autoincrement())
+  name                 String        @unique
+  type                 ConditionType
+  affectedStat         String?
+  modifier             Int           @default(0)
+  visibilityEffect     String        @default("none")
+  defaultDurationTicks Int?
+  regionScoped         Boolean       @default(false)
+  createdAt            DateTime      @default(now())
+  metadata             Json?
+}
+
+// ─── MESSAGES ────────────────────────────────────────────────────────────────
+
+model Message {
+  id                 Int      @id @default(autoincrement())
+  fromUserId         Int
+  toUserId           Int
+  fromAvatarId       Int?
+  toAvatarId         Int?
+  subject            String   @default("")
+  body               String
+  sentAt             DateTime @default(now())
+  readAt             DateTime?
+  attachedInstanceId Int?
+  metadata           Json?
+
+  fromUser  User  @relation("FromUser", fields: [fromUserId], references: [id])
+  toUser    User  @relation("ToUser",   fields: [toUserId],   references: [id])
+}
+
+// ─── WORLD STATE ─────────────────────────────────────────────────────────────
+
+model WorldState {
+  id          Int      @id @default(1)
+  tickCount   BigInt   @default(0)
+  startedAt   DateTime @default(now())
+  lastFlushAt DateTime @default(now())
+  metadata    Json?
+}
