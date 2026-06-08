@@ -220,6 +220,22 @@ model ObjectInstance {
   @@unique([regionId, id])
 }
 
+// ─── SKILL DEFINITIONS ───────────────────────────────────────────────────────
+
+model SkillDefinition {
+  id                Int      @id @default(autoincrement())
+  name              String   @unique
+  stat              String
+  rollContribution  Int
+  autoSucceedSimple Boolean  @default(false)
+  prerequisites     Json     @default("[]")
+  unlocksActions    Json     @default("[]")
+  attachedToObject  Boolean  @default(false)
+  regionScoped      Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  metadata          Json?
+}
+
 // ─── PERMISSIONS ─────────────────────────────────────────────────────────────
 
 model Permission {
