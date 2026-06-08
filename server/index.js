@@ -13,6 +13,10 @@ async function main() {
   await initRedis();
   registerBuiltins();
 
+  // Phase 2 command module registrations go here after registerBuiltins():
+  // e.g. import { register as registerNavigation } from './interface/cmd_navigation.js';
+  //      registerNavigation();
+
   const { sessions } = startWsServer(config.port);
 
   const tickWorker = new Worker(new URL('./tick/engine.js', import.meta.url));

@@ -75,19 +75,23 @@ export async function removeCondition(entityType, entityId, conditionName) {
 
 /**
  * Tick all conditions — decrement durations, remove expired, fire expiry events.
- * Called once per tick by the tick engine.
+ * Called once per tick by the maintenance task registered in index.js.
  *
  * @param {number} currentTick
  * @param {Function} emitEvent  function(entityType, entityId, eventName, data)
  */
 export async function tickConditions(currentTick, emitEvent) {
-  const avatarKeys = await redis.keys('avatar:*');
-  for (const key of avatarKeys) {
-    const raw = await redis.get(key);
-    if (!raw) continue;
-    const entity = JSON.parse(raw);
-    await _tickEntityConditions(entity, 'avatar', key.replace('avatar:', ''), currentTick, emitEvent);
-    await redis.set(key, JSON.stringify(entity));
+  for (const pattern of ['avatar:*', 'instance:*']) {
+    const keys = await redis.keys(pattern);
+    for (const key of keys) {
+      const raw = await redis.get(key);
+      if (!raw) continue;
+      const entity = JSON.parse(raw);
+      const [type] = key.split(':');                        // 'avatar' | 'instance'
+      const id = key.slice(key.indexOf(':') + 1);           // avatarId OR "regionId:instanceId"
+      await _tickEntityConditions(entity, type, id, currentTick, emitEvent);
+      await redis.set(key, JSON.stringify(entity));
+    }
   }
 }
 
@@ -113,9 +117,10 @@ export function hasCondition(entity, conditionName) {
 
 /**
  * Get the net modifier for a stat from all active conditions.
+ * affectedStat may be a comma-separated list (e.g. "phy_for,phy_pre").
  */
 export function getStatModifier(entity, statName) {
   return (entity.activeConditions ?? [])
-    .filter(c => c.affectedStat === statName)
+    .filter(c => c.affectedStat && c.affectedStat.split(',').map(s => s.trim()).includes(statName))
     .reduce((sum, c) => sum + (c.modifier ?? 0), 0);
 }

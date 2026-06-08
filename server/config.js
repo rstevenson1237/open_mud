@@ -13,4 +13,5 @@ export const config = {
   instanceArchiveAfterTicks: parseInt(process.env.INSTANCE_ARCHIVE_TICKS ?? '100'),
   defaultWorldDayTicks: parseInt(process.env.WORLD_DAY_TICKS ?? '100'),
   logLevel: process.env.LOG_LEVEL ?? 'info',
+  maxResponseEventsPerTick: parseInt(process.env.MAX_RESPONSE_EVENTS_PER_TICK ?? '64'),
 };
