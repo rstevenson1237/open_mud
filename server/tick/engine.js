@@ -9,6 +9,7 @@ import { resolve } from '../engine/resolver.js';
 import { orderPhase } from '../engine/resolution.js';
 import { runMaintenance, registerMaintenanceTask } from './maintenance.js';
 import { tickConditions } from '../engine/conditions.js';
+import { navigationHandler } from '../engine/navigation.js';
 import { drainPhase, enqueueAction } from './queue.js';
 import { logger } from '../log/logger.js';
 
@@ -34,15 +35,16 @@ async function resolveActionRoll(action) {
 }
 
 async function applyAction(action, result, emit, tick) {
+  const sendOutput = (tokens, html) => parentPort.postMessage({ type: 'OUTPUT_MULTI', tokens, html });
   const key = action.trigger ?? action.category;
   const handler = SYSTEM_HANDLERS.get(key);
-  if (handler?.apply) return handler.apply(action, result, emit, tick);
+  if (handler?.apply) return handler.apply(action, result, emit, tick, sendOutput);
   // Default fallback: run as trigger through the state machine (Phase 1 behavior)
   if (action.trigger) {
     await runTrigger(
       action.trigger,
       { ...action.context, currentTick: tick },
-      (tokens, html) => parentPort.postMessage({ type: 'OUTPUT_MULTI', tokens, html }),
+      sendOutput,
       emit,
     );
   }
@@ -57,6 +59,9 @@ async function init() {
   registerMaintenanceTask('conditions', tickConditions);
   // 'survival' registered by TASK 9 — import survivalTick from '../engine/survival.js'
   // 'world-scripts' registered by TASK 12 — import emitOnTick from '../engine/mobs.js'
+
+  // Register Phase 2 system handlers (worker-thread dispatch for phase actions).
+  registerSystemHandler('movement', navigationHandler);
 
   const world = await db.worldState.findUnique({ where: { id: 1 } });
   tickCount = Number(world?.tickCount ?? 0n);
