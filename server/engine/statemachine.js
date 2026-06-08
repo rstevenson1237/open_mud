@@ -132,6 +132,12 @@ async function _evalCondition(cond, context, vars) {
       });
       return item !== null;
     }
+    case 'has_visited': {
+      // has_visited(regionId) — true if regionId is in avatar.visitedRegions
+      const entity = await _loadEntity(context);
+      const visited = entity?.visitedRegions ?? [];
+      return visited.includes(parseInt(cond.args[0]));
+    }
     default:
       logger.warn('STATE_MACHINE', 'Unknown condition function', { fn: cond.fn });
       return false;

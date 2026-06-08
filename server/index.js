@@ -4,6 +4,7 @@ import { initDb } from './db/postgres.js';
 import { initRedis } from './db/redis.js';
 import { startWsServer, handleWorkerMessage } from './ws/server.js';
 import { registerBuiltins } from './interface/builtins.js';
+import { register as registerCreation } from './interface/cmd_creation.js';
 import { logger } from './log/logger.js';
 
 async function main() {
@@ -13,9 +14,9 @@ async function main() {
   await initRedis();
   registerBuiltins();
 
-  // Phase 2 command module registrations go here after registerBuiltins():
-  // e.g. import { register as registerNavigation } from './interface/cmd_navigation.js';
-  //      registerNavigation();
+  // Phase 2 command registrations (order matters for alias resolution)
+  registerCreation();
+  // Navigation, communication, inventory, etc. registered in later tasks
 
   const { sessions } = startWsServer(config.port);
 
