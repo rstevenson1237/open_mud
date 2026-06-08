@@ -189,6 +189,7 @@ model ObjectTemplate {
   regionId   Int?
   name       String
   type       ObjectType
+  weight     Int        @default(1)
   baseSchema Json       @default("{}")
   scriptId   Int?
   lootTable  Json       @default("[]")

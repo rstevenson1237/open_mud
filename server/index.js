@@ -7,6 +7,7 @@ import { registerBuiltins } from './interface/builtins.js';
 import { register as registerCreation } from './interface/cmd_creation.js';
 import { register as registerNavigation } from './interface/cmd_navigation.js';
 import { register as registerCommunication } from './interface/cmd_communication.js';
+import { register as registerInventory } from './interface/cmd_inventory.js';
 import { logger } from './log/logger.js';
 
 async function main() {
@@ -20,6 +21,7 @@ async function main() {
   registerCreation();
   registerNavigation();
   registerCommunication();
+  registerInventory();
 
   const { sessions } = startWsServer(config.port);
 
