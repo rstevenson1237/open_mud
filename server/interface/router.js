@@ -3,6 +3,7 @@ import { checkPermission } from '../engine/permissions.js';
 import { redis } from '../db/redis.js';
 import { renderOutput } from './output.js';
 import { logger } from '../log/logger.js';
+import { enqueueAction } from '../tick/queue.js';
 
 const TYPE_RANK = { ROOT: 5, ADMIN: 4, POWER_USER: 3, CHARACTER: 2, GHOST: 1 };
 
@@ -23,6 +24,35 @@ export async function routeInput(raw, session) {
 
   if (input.startsWith('//')) return { output: null };
 
+  // Condition intercept — check before processing player input
+  const override = await checkInputOverride(session);
+  if (override) {
+    logger.info('ROUTER', 'Input overridden by condition', {
+      avatarId: session.avatarId,
+      condition: override.name,
+      overrideAction: override.overrideAction,
+    });
+    if (override.overrideAction) {
+      await enqueueAction({
+        phase: 1,
+        trigger: 'on_command',
+        category: 'movement',
+        resourceKey: `avatar:${session.avatarId}`,
+        context: {
+          raw: override.overrideAction,
+          userId: session.userId,
+          userType: session.userType,
+          avatarId: session.avatarId,
+          sessionToken: session.sessionToken,
+          regionId: session.regionId,
+          locationId: session.locationId,
+          _overridden: true,
+        },
+      });
+    }
+    return { output: null };
+  }
+
   const resolved = await resolveAlias(input, session);
 
   const cmd = resolveCommand(resolved);
@@ -42,9 +72,10 @@ export async function routeInput(raw, session) {
     }
   }
 
-  // Queue as game action for next tick
-  await redis.rPush('action:queue', JSON.stringify({
+  // Queue as game action for next tick (phase 3: action)
+  await enqueueAction({
     id: `${session.sessionToken}:${Date.now()}`,
+    phase: 3,
     sessionToken: session.sessionToken,
     trigger: 'on_command',
     category: 'other',
@@ -57,9 +88,18 @@ export async function routeInput(raw, session) {
       regionId: session.regionId,
       locationId: session.locationId,
     },
-  }));
+  });
 
   return { queued: true };
+}
+
+async function checkInputOverride(session) {
+  if (!session.avatarId) return null;
+  const raw = await redis.get(`avatar:${session.avatarId}`);
+  if (!raw) return null;
+  const avatar = JSON.parse(raw);
+  const overriding = (avatar.activeConditions ?? []).find(c => c.overridesInput === true);
+  return overriding ?? null;
 }
 
 async function resolveAlias(input, session) {

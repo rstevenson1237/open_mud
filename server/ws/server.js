@@ -22,6 +22,9 @@ export function startWsServer(port) {
     } else if (req.url === '/terminal.css') {
       res.writeHead(200, { 'Content-Type': 'text/css' });
       res.end(readFileSync('./client/terminal.css'));
+    } else if (req.method === 'POST' && req.url === '/upload/script') {
+      res.writeHead(501, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Script file upload not yet implemented. Available in Phase 2.' }));
     } else {
       res.writeHead(404); res.end();
     }

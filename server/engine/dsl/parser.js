@@ -18,6 +18,15 @@ const VALID_ACTION_FNS = new Set([
   'lock', 'unlock', 'enqueue', 'resolve_roll',
   'set_var', 'if_success', 'if_fail',
   'create_instance', 'destroy_instance',
+  'call',           // call(subroutine_name)
+  'apply_wound',    // stub — Phase 2 implements
+  'apply_sanity',   // stub — Phase 2 implements
+  'grant_skill',    // stub — Phase 2 implements
+  'revoke_skill',   // stub — Phase 2 implements
+  'set_stance',     // stub — Phase 2 implements
+  'action_run',     // stub — Phase 2 implements
+  'attack_target',  // stub — Phase 2 implements
+  'end_combat',     // stub — Phase 2 implements
 ]);
 
 /**
@@ -31,21 +40,46 @@ const VALID_ACTION_FNS = new Set([
  * Returns: { ok: true, body: [...] } | { ok: false, errors: [...] }
  */
 export function parseDSL(source) {
-  const lines = source.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('//'));
-  const rules = [];
+  const lines = source
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => l && !l.startsWith('//'));
+
+  const subroutines = {};
+  const topLevelRules = [];
   const errors = [];
 
+  let currentSubroutine = null;
+
   for (const line of lines) {
+    // Subroutine declaration: { name }
+    const subMatch = line.match(/^\{\s*(\w+)\s*\}$/);
+    if (subMatch) {
+      currentSubroutine = subMatch[1];
+      subroutines[currentSubroutine] = [];
+      continue;
+    }
+
+    // End of subroutine block: standalone . on its own line
+    if (line === '.') {
+      currentSubroutine = null;
+      continue;
+    }
+
     const result = _parseLine(line);
     if (result.error) {
       errors.push(result.error);
     } else {
-      rules.push(result.rule);
+      if (currentSubroutine) {
+        subroutines[currentSubroutine].push(result.rule);
+      } else {
+        topLevelRules.push(result.rule);
+      }
     }
   }
 
   if (errors.length > 0) return { ok: false, errors };
-  return { ok: true, body: rules };
+  return { ok: true, body: { rules: topLevelRules, subroutines } };
 }
 
 function _parseLine(line) {

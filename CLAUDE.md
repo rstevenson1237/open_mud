@@ -93,11 +93,11 @@ Critical ones: `DATABASE_URL`, `REDIS_URL`, `PORT=3000`, `TICK_MS=6000`.
 
 ## Phase Status
 
-- **Phase 1** — Essential framework. COMPLETE (or in progress).
-  Server, DB schema, tick engine, permission resolver, state machine,
-  condition engine, roll engine, DSL parser, WS server, browser UI.
-- **Phase 2** — Game interface. NOT STARTED.
-  Commands, stats, skills, combat, survival, builder tools.
+- **Phase 1** — Essential framework. COMPLETE + pre-Phase-2 additions applied.
+  Server, DB schema, tick engine (4-phase), permission resolver, state machine,
+  condition engine (with input override hook), roll engine, DSL parser
+  (subroutine blocks), WS server, browser UI.
+- **Phase 2** — Game interface. READY TO BEGIN.
 - **Phase 3** — Content building and delivery. NOT STARTED.
 - **Phase 4** — Future stubs. NOT STARTED.
 

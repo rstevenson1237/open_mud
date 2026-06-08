@@ -7,6 +7,9 @@ import { flushDirtyState } from '../db/sync.js';
 import { tickConditions } from '../engine/conditions.js';
 import { runTrigger } from '../engine/statemachine.js';
 import { logger } from '../log/logger.js';
+import { enqueueAction } from './queue.js';
+
+export { enqueueAction };
 
 let tickCount = 0;
 let expectedTime = Date.now();
@@ -26,55 +29,10 @@ function scheduleTick() {
   setTimeout(processTick, delay);
 }
 
-async function processTick() {
-  const start = Date.now();
-  expectedTime += config.tickMs;
-  tickCount++;
-
-  try {
-    // 1. Pull queued actions from Redis
-    const actions = await drainActionQueue();
-
-    // 2. Arbitrate conflicts
-    const resolved = arbitrate(actions);
-
-    // 3. Tick conditions (decrement durations, fire expiry events)
-    await tickConditions(tickCount, emitEventToStateMachine);
-
-    // 4. Process resolved actions through state machine
-    for (const action of resolved) {
-      await processAction(action);
-    }
-
-    // 5. Tick world clocks
-    await tickClocks();
-
-    // 6. Flush to Postgres every N ticks
-    if (tickCount % config.dbFlushIntervalTicks === 0) {
-      await flushDirtyState(tickCount);
-    }
-
-    // 7. Update tick count in Redis
-    await redis.set('world:tickCount', String(tickCount));
-
-    // 8. Check drift
-    const elapsed = Date.now() - start;
-    if (elapsed > config.tickDriftWarnMs) {
-      logger.warn('TICK', 'Tick drift detected', { tickCount, elapsedMs: elapsed, limitMs: config.tickDriftWarnMs });
-      parentPort.postMessage({ type: 'ADMIN_ALERT', message: `Tick ${tickCount} took ${elapsed}ms (limit ${config.tickDriftWarnMs}ms)` });
-    }
-
-  } catch (e) {
-    logger.error('TICK', 'Tick error', { tickCount, error: e.message, stack: e.stack });
-    // Do not crash — continue processing next tick
-  }
-
-  scheduleTick();
-}
-
-async function drainActionQueue() {
-  const raw = await redis.lRange('action:queue', 0, -1);
-  await redis.del('action:queue');
+async function drainPhaseQueue(phase) {
+  const key = `action:queue:phase${phase}`;
+  const raw = await redis.lRange(key, 0, -1);
+  await redis.del(key);
   return raw.map(r => JSON.parse(r));
 }
 
@@ -107,22 +65,67 @@ function arbitrate(actions) {
   return resolved;
 }
 
-async function processAction(action) {
+async function processAction(action, currentPhase) {
   await runTrigger(
     action.trigger,
-    { ...action.context, currentTick: tickCount },
+    { ...action.context, currentTick: tickCount, _currentPhase: currentPhase },
     (tokens, html) => parentPort.postMessage({ type: 'OUTPUT_MULTI', tokens, html }),
-    emitEventToStateMachine,
+    (eventName, targetType, targetId, data, targetPhase) =>
+      emitEventToPhase(eventName, targetType, targetId, data, targetPhase, currentPhase),
   );
 }
 
-async function emitEventToStateMachine(eventName, targetType, targetId, data) {
-  await redis.rPush('action:queue', JSON.stringify({
+// Phase-aware event emitter. Events targeting an earlier phase defer to next tick's phase 4.
+async function emitEventToPhase(eventName, targetType, targetId, data, targetPhase = 4, currentPhase = 4) {
+  const resolvedPhase = targetPhase < currentPhase ? 4 : targetPhase;
+  await enqueueAction({
+    phase: resolvedPhase,
     trigger: eventName,
     category: 'other',
     resourceKey: `${targetType}:${targetId}`,
-    context: { ...data, targetType, targetId },
-  }));
+    context: { ...data, targetType, targetId, _currentPhase: resolvedPhase },
+  });
+}
+
+async function processTick() {
+  const start = Date.now();
+  expectedTime += config.tickMs;
+  tickCount++;
+
+  try {
+    // Process four phases sequentially
+    for (let phase = 1; phase <= 4; phase++) {
+      const actions = await drainPhaseQueue(phase);
+      const resolved = arbitrate(actions);
+      for (const action of resolved) {
+        await processAction(action, phase);
+      }
+    }
+
+    // Tick conditions (after all phases)
+    await tickConditions(tickCount, (name, type, id, data) => emitEventToPhase(name, type, id, data, 4, 4));
+
+    // Tick world clocks
+    await tickClocks();
+
+    // Flush to Postgres every N ticks
+    if (tickCount % config.dbFlushIntervalTicks === 0) {
+      await flushDirtyState(tickCount);
+    }
+
+    await redis.set('world:tickCount', String(tickCount));
+
+    const elapsed = Date.now() - start;
+    if (elapsed > config.tickDriftWarnMs) {
+      logger.warn('TICK', 'Tick drift detected', { tickCount, elapsedMs: elapsed, limitMs: config.tickDriftWarnMs });
+      parentPort.postMessage({ type: 'ADMIN_ALERT', message: `Tick ${tickCount} took ${elapsed}ms (limit ${config.tickDriftWarnMs}ms)` });
+    }
+
+  } catch (e) {
+    logger.error('TICK', 'Tick error', { tickCount, error: e.message, stack: e.stack });
+  }
+
+  scheduleTick();
 }
 
 async function tickClocks() {

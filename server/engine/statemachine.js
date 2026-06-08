@@ -23,7 +23,11 @@ export async function runTrigger(trigger, context, emitOutput, emitEvent) {
     };
     const vars = {};
 
-    for (const rule of script.body) {
+    // Support both old flat-array body and new { rules, subroutines } shape
+    const body = Array.isArray(script.body) ? script.body : (script.body?.rules ?? []);
+    const subroutines = Array.isArray(script.body) ? {} : (script.body?.subroutines ?? {});
+
+    for (const rule of body) {
       if (rule.trigger !== trigger) continue;
       if (budget.transitions <= 0) {
         logger.warn('STATE_MACHINE', 'Script budget exceeded (transitions)', { scriptId: script.id });
@@ -34,7 +38,7 @@ export async function runTrigger(trigger, context, emitOutput, emitEvent) {
       if (!conditionsMet) continue;
 
       budget.transitions--;
-      await _execActions(rule.actions, context, vars, budget, emitOutput, emitEvent, script.id);
+      await _execActions(rule.actions, context, vars, budget, emitOutput, emitEvent, script.id, subroutines);
     }
   }
 }
@@ -120,7 +124,7 @@ async function _evalCondition(cond, context, vars) {
   }
 }
 
-async function _execActions(actions, context, vars, budget, emitOutput, emitEvent, scriptId) {
+async function _execActions(actions, context, vars, budget, emitOutput, emitEvent, scriptId, subroutines = {}) {
   for (const action of actions) {
     logger.audit('STATE_MACHINE', 'action_exec', { scriptId, fn: action.fn, args: action.args });
 
@@ -177,6 +181,25 @@ async function _execActions(actions, context, vars, budget, emitOutput, emitEven
       case 'destroy_instance': {
         const [instanceId] = action.args;
         logger.info('STATE_MACHINE', 'destroy_instance_stub', { instanceId });
+        break;
+      }
+      case 'call': {
+        const [subName] = action.args;
+        const subRules = subroutines[subName];
+        if (!subRules) {
+          logger.warn('STATE_MACHINE', 'Unknown subroutine', { subName, scriptId });
+          break;
+        }
+        for (const rule of subRules) {
+          if (budget.transitions <= 0) {
+            logger.warn('STATE_MACHINE', 'Script budget exceeded in subroutine', { scriptId, subName });
+            break;
+          }
+          const condsMet = await _evalConditions(rule.conditions, context, vars);
+          if (!condsMet) continue;
+          budget.transitions--;
+          await _execActions(rule.actions, context, vars, budget, emitOutput, emitEvent, scriptId, subroutines);
+        }
         break;
       }
       default:
