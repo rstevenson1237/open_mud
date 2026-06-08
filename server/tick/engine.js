@@ -10,6 +10,7 @@ import { orderPhase } from '../engine/resolution.js';
 import { runMaintenance, registerMaintenanceTask } from './maintenance.js';
 import { tickConditions } from '../engine/conditions.js';
 import { navigationHandler } from '../engine/navigation.js';
+import { communicationHandler } from '../engine/communication.js';
 import { drainPhase, enqueueAction } from './queue.js';
 import { logger } from '../log/logger.js';
 
@@ -62,6 +63,7 @@ async function init() {
 
   // Register Phase 2 system handlers (worker-thread dispatch for phase actions).
   registerSystemHandler('movement', navigationHandler);
+  registerSystemHandler('communication', communicationHandler);
 
   const world = await db.worldState.findUnique({ where: { id: 1 } });
   tickCount = Number(world?.tickCount ?? 0n);

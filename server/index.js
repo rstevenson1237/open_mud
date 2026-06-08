@@ -6,6 +6,7 @@ import { startWsServer, handleWorkerMessage } from './ws/server.js';
 import { registerBuiltins } from './interface/builtins.js';
 import { register as registerCreation } from './interface/cmd_creation.js';
 import { register as registerNavigation } from './interface/cmd_navigation.js';
+import { register as registerCommunication } from './interface/cmd_communication.js';
 import { logger } from './log/logger.js';
 
 async function main() {
@@ -18,6 +19,7 @@ async function main() {
   // Phase 2 command registrations (order matters for alias resolution)
   registerCreation();
   registerNavigation();
+  registerCommunication();
 
   const { sessions } = startWsServer(config.port);
 
