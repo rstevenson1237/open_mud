@@ -9,6 +9,7 @@ import { register as registerNavigation } from './interface/cmd_navigation.js';
 import { register as registerCommunication } from './interface/cmd_communication.js';
 import { register as registerInventory } from './interface/cmd_inventory.js';
 import { register as registerCombat } from './interface/cmd_combat.js';
+import { register as registerBuilder } from './interface/cmd_builder.js';
 import { logger } from './log/logger.js';
 
 async function main() {
@@ -24,6 +25,7 @@ async function main() {
   registerCommunication();
   registerInventory();
   registerCombat();
+  registerBuilder();
 
   const { sessions } = startWsServer(config.port);
 
