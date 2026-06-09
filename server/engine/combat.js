@@ -270,18 +270,9 @@ export const combatHandler = {
 // ─── Death handler (Response phase, event 'on_kill') ─────────────────────────
 
 export const killHandler = {
-  async apply(action, _result, emit, tick, sendOutput) {
-    const { entityType, entityId, data } = action.context ?? action;
-    if (entityType !== 'avatar') return; // Mob death handled via loot drop above
-    const avatarId = parseInt(String(entityId).split(':')[0]);
-
-    const avRaw = await redis.get(`avatar:${avatarId}`);
-    if (!avRaw) return;
-    const avatar = JSON.parse(avRaw);
-
-    // Wound chain will apply dying (10 ticks) in next survival tick — nothing explicit needed here.
-    // However, clear in_combat immediately on reaching woundMax.
-    // The dying expiry respawn is handled by deathOnDyingExpiry below.
+  async apply(_action, _result, _emit, _tick, _sendOutput) {
+    // Mob death: handled via loot drop in applyWoundToMob above.
+    // Avatar death: survival tick applies dying condition; conditionExpireHandler respawns.
   },
 };
 
@@ -360,4 +351,117 @@ function _getEntityStat(entity, statKey, tmpl) {
   const tmplStats = tmpl?.baseSchema?.stats ?? {};
   if (tmplStats[statKey] != null) return Math.min(tmplStats[statKey], 40);
   return 20;
+}
+
+// ─── Horror / Sanity handler (Response phase, events on_horror / on_dread / on_mindbend) ─
+
+export const horrorHandler = {
+  async apply(action, _result, emit, tick, sendOutput) {
+    const ctx = action.context ?? {};
+    const targetAvatarId = ctx.targetAvatarId ?? parseInt(String(ctx.targetId));
+    const { sourceSessionToken, sourceMenFor } = ctx;
+
+    if (!targetAvatarId) return;
+
+    const avRaw = await redis.get(`avatar:${targetAvatarId}`);
+    if (!avRaw) return;
+    const target = JSON.parse(avRaw);
+
+    const targetMenRes = Math.min(target.stats?.men_res?.value ?? 20, 40);
+    const srcMenFor    = Math.min(sourceMenFor ?? 20, 40);
+
+    const tUser = await db.user.findFirst({
+      where: { avatars: { some: { id: targetAvatarId } } },
+      select: { sessionToken: true },
+    });
+    const targetToken = tUser?.sessionToken ?? null;
+
+    const opposed = resolveOpposed(sourceSessionToken ?? null, targetToken, srcMenFor, targetMenRes);
+    if (opposed.winner !== 'attacker') return; // horror resisted
+
+    target.sanity = (target.sanity ?? 0) + 1;
+    const sanityMax = target.sanityMax ?? 3;
+    await redis.set(`avatar:${targetAvatarId}`, JSON.stringify(target));
+    await markDirty('avatar', targetAvatarId);
+
+    emit('avatar', String(targetAvatarId), 'on_sanity_damage', { targetAvatarId });
+
+    if (targetToken) {
+      sendOutput([targetToken], renderOutput('[color=magenta]Your mind reels from the horror![/]'));
+    }
+
+    if (target.sanity >= sanityMax) {
+      const regionId = target.regionId;
+      let breakBehavior = 'condition_only';
+      let breakDuration = 10;
+      if (regionId != null) {
+        const region = await db.region.findUnique({ where: { id: regionId }, select: { config: true } });
+        breakBehavior = region?.config?.sanityBreakBehavior ?? 'condition_only';
+        breakDuration = region?.config?.sanityBreakDurationTicks ?? 10;
+      }
+      await _applySanityBreak(targetAvatarId, breakBehavior, breakDuration, tick, sendOutput, targetToken, emit);
+    }
+
+    logger.info('COMBAT', 'horror_applied', { targetAvatarId, sanity: target.sanity });
+  },
+};
+
+async function _applySanityBreak(avatarId, behavior, durationTicks, tick, sendOutput, sessionToken, emit) {
+  switch (behavior) {
+    case 'confusion':
+      await applyCondition('avatar', avatarId, 'confusion', durationTicks, tick);
+      break;
+    case 'flee':
+      await applyCondition('avatar', avatarId, 'flee_state', durationTicks, tick);
+      break;
+    case 'panic':
+      await applyCondition('avatar', avatarId, 'panic', durationTicks, tick);
+      break;
+    case 'comatose':
+      await applyCondition('avatar', avatarId, 'comatose', null, tick);
+      await _respawnAvatarSanity(avatarId, tick, sendOutput, sessionToken);
+      return; // _respawnAvatarSanity sends its own message
+    case 'mental_break':
+      await applyCondition('avatar', avatarId, 'mental_break', null, tick);
+      break;
+    default: // 'condition_only' — survival chain applies broken via sanity track
+      break;
+  }
+
+  if (sessionToken) {
+    sendOutput([sessionToken], renderOutput('[color=magenta]Your mind breaks![/]'));
+  }
+}
+
+async function _respawnAvatarSanity(avatarId, tick, sendOutput, sessionToken) {
+  const avRaw = await redis.get(`avatar:${avatarId}`);
+  if (!avRaw) return;
+  const avatar = JSON.parse(avRaw);
+
+  const regionId = avatar.regionId;
+  let entryLocationId = null;
+  if (regionId != null) {
+    const region = await db.region.findUnique({ where: { id: regionId }, select: { config: true } });
+    entryLocationId = region?.config?.entryLocationId ?? null;
+    if (entryLocationId == null) {
+      const firstLoc = await db.location.findFirst({ where: { regionId }, orderBy: { id: 'asc' }, select: { id: true } });
+      entryLocationId = firstLoc?.id ?? null;
+    }
+  }
+
+  avatar.sanity = 0;
+  avatar.activeConditions = (avatar.activeConditions ?? []).filter(c =>
+    !['shaken_1','shaken_2','shaken_3','broken','confusion','flee_state','comatose','in_combat'].includes(c.name)
+  );
+  delete avatar.state?.combatTarget;
+  if (entryLocationId != null) avatar.locationId = entryLocationId;
+
+  await redis.set(`avatar:${avatarId}`, JSON.stringify(avatar));
+  await markDirty('avatar', avatarId);
+
+  if (sessionToken) {
+    sendOutput([sessionToken], renderOutput('[color=yellow]Your mind shatters. You are returned to safety.[/]'));
+  }
+
+  logger.info('COMBAT', 'avatar_sanity_respawn', { avatarId, entryLocationId });
 }

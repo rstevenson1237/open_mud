@@ -8,12 +8,12 @@ import { runTrigger } from '../engine/statemachine.js';
 import { resolve } from '../engine/resolver.js';
 import { orderPhase } from '../engine/resolution.js';
 import { runMaintenance, registerMaintenanceTask } from './maintenance.js';
-import { tickConditions } from '../engine/conditions.js';
+import { tickConditions, hasCondition } from '../engine/conditions.js';
 import { navigationHandler } from '../engine/navigation.js';
 import { communicationHandler } from '../engine/communication.js';
 import { inventoryHandler } from '../engine/inventory.js';
 import { survivalTick } from '../engine/survival.js';
-import { combatHandler, conditionExpireHandler } from '../engine/combat.js';
+import { combatHandler, conditionExpireHandler, horrorHandler } from '../engine/combat.js';
 import { drainPhase, enqueueAction } from './queue.js';
 import { logger } from '../log/logger.js';
 
@@ -54,6 +54,53 @@ async function applyAction(action, result, emit, tick) {
   }
 }
 
+// ─── overridesInput: replace phase-1 actions for avatars with override conditions ─
+
+async function _resolvePhase1Overrides(actions) {
+  const result = [];
+  for (const action of actions) {
+    const actorId = action.context?.actorAvatarId;
+    if (!actorId) { result.push(action); continue; }
+
+    const avRaw = await redis.get(`avatar:${actorId}`);
+    if (!avRaw) { result.push(action); continue; }
+    const avatar = JSON.parse(avRaw);
+
+    const overrideAction = await _findOverrideAction(avatar);
+    if (!overrideAction) { result.push(action); continue; }
+    if (overrideAction === 'block') continue; // drop action (comatose/collapsed/dying)
+
+    if (overrideAction === 'random_move()') {
+      const rId = parseInt(avatar.regionId);
+      const lId = parseInt(avatar.locationId);
+      const exits = await db.exit.findMany({ where: { regionId: rId, fromLocationId: lId } });
+      const unlocked = exits.filter(e => !(e.isState?.locked));
+      if (!unlocked.length) continue;
+      const exit = unlocked[Math.floor(Math.random() * unlocked.length)];
+      result.push({ ...action, context: { ...action.context, direction: exit.direction, moveType: 'go' } });
+    } else if (overrideAction === 'action_run()') {
+      if (!hasCondition(avatar, 'in_combat')) continue;
+      result.push({
+        ...action,
+        context: { ...action.context, moveType: 'flee', combatTarget: avatar.state?.combatTarget },
+      });
+    } else {
+      result.push(action);
+    }
+  }
+  return result;
+}
+
+async function _findOverrideAction(avatar) {
+  for (const c of (avatar.activeConditions ?? [])) {
+    if (!c.conditionId) continue;
+    const condDef = await db.condition.findUnique({ where: { id: c.conditionId } });
+    if (!condDef?.overridesInput) continue;
+    return condDef.overrideAction ?? 'block';
+  }
+  return null;
+}
+
 async function init() {
   await initDb();
   await initRedis();
@@ -70,6 +117,9 @@ async function init() {
   registerSystemHandler('inventory', inventoryHandler);
   registerSystemHandler('combat', combatHandler);
   registerSystemHandler('on_condition_expire', conditionExpireHandler);
+  registerSystemHandler('on_horror',    horrorHandler);
+  registerSystemHandler('on_dread',     horrorHandler);
+  registerSystemHandler('on_mindbend',  horrorHandler);
 
   const world = await db.worldState.findUnique({ where: { id: 1 } });
   tickCount = Number(world?.tickCount ?? 0n);
@@ -98,7 +148,9 @@ async function processTick() {
     for (const phase of [1, 2, 3]) {
       const actions = await drainPhase(phase);
       if (actions.length === 0) continue;
-      const ordered = await orderPhase(actions, (a) => resolveActionRoll(a));
+      const resolved = phase === 1 ? await _resolvePhase1Overrides(actions) : actions;
+      if (resolved.length === 0) continue;
+      const ordered = await orderPhase(resolved, (a) => resolveActionRoll(a));
       for (const { action, result } of ordered) {
         await applyAction(action, result, emit, tickCount);
       }
