@@ -4,19 +4,128 @@ import { config } from '../config.js';
 import { initRedis, redis } from '../db/redis.js';
 import { initDb, db } from '../db/postgres.js';
 import { flushDirtyState } from '../db/sync.js';
-import { tickConditions } from '../engine/conditions.js';
 import { runTrigger } from '../engine/statemachine.js';
+import { resolve } from '../engine/resolver.js';
+import { orderPhase } from '../engine/resolution.js';
+import { runMaintenance, registerMaintenanceTask } from './maintenance.js';
+import { tickConditions, hasCondition } from '../engine/conditions.js';
+import { navigationHandler } from '../engine/navigation.js';
+import { communicationHandler } from '../engine/communication.js';
+import { inventoryHandler } from '../engine/inventory.js';
+import { survivalTick } from '../engine/survival.js';
+import { combatHandler, conditionExpireHandler, horrorHandler } from '../engine/combat.js';
+import { emitOnTick, mobKillHandler } from '../engine/mobs.js';
+import { purchaseHandler, saleHandler } from '../engine/economy.js';
+import { drainPhase, enqueueAction } from './queue.js';
 import { logger } from '../log/logger.js';
-import { enqueueAction } from './queue.js';
 
 export { enqueueAction };
 
 let tickCount = 0;
 let expectedTime = Date.now();
 
+// Phase 2 system dispatch map: trigger/category → { roll(action), apply(action, result, emit, tick) }
+// Each Phase 2 system registers one entry. Engine dispatches here before falling back to runTrigger.
+const SYSTEM_HANDLERS = new Map();
+
+export function registerSystemHandler(key, handler) {
+  SYSTEM_HANDLERS.set(key, handler);
+}
+
+async function resolveActionRoll(action) {
+  const key = action.trigger ?? action.category;
+  const handler = SYSTEM_HANDLERS.get(key);
+  if (handler?.roll) return handler.roll(action);
+  // Default: ungated roll (orders the action; does not gate it)
+  return resolve(action.sessionToken, null);
+}
+
+async function applyAction(action, result, emit, tick) {
+  const sendOutput = (tokens, html) => parentPort.postMessage({ type: 'OUTPUT_MULTI', tokens, html });
+  const key = action.trigger ?? action.category;
+  const handler = SYSTEM_HANDLERS.get(key);
+  if (handler?.apply) return handler.apply(action, result, emit, tick, sendOutput);
+  // Default fallback: run as trigger through the state machine (Phase 1 behavior)
+  if (action.trigger) {
+    await runTrigger(
+      action.trigger,
+      { ...action.context, currentTick: tick },
+      sendOutput,
+      emit,
+    );
+  }
+}
+
+// ─── overridesInput: replace phase-1 actions for avatars with override conditions ─
+
+async function _resolvePhase1Overrides(actions) {
+  const result = [];
+  for (const action of actions) {
+    const actorId = action.context?.actorAvatarId;
+    if (!actorId) { result.push(action); continue; }
+
+    const avRaw = await redis.get(`avatar:${actorId}`);
+    if (!avRaw) { result.push(action); continue; }
+    const avatar = JSON.parse(avRaw);
+
+    const overrideAction = await _findOverrideAction(avatar);
+    if (!overrideAction) { result.push(action); continue; }
+    if (overrideAction === 'block') continue; // drop action (comatose/collapsed/dying)
+
+    if (overrideAction === 'random_move()') {
+      const rId = parseInt(avatar.regionId);
+      const lId = parseInt(avatar.locationId);
+      const exits = await db.exit.findMany({ where: { regionId: rId, fromLocationId: lId } });
+      const unlocked = exits.filter(e => !(e.isState?.locked));
+      if (!unlocked.length) continue;
+      const exit = unlocked[Math.floor(Math.random() * unlocked.length)];
+      result.push({ ...action, context: { ...action.context, direction: exit.direction, moveType: 'go' } });
+    } else if (overrideAction === 'action_run()') {
+      if (!hasCondition(avatar, 'in_combat')) continue;
+      result.push({
+        ...action,
+        context: { ...action.context, moveType: 'flee', combatTarget: avatar.state?.combatTarget },
+      });
+    } else {
+      result.push(action);
+    }
+  }
+  return result;
+}
+
+async function _findOverrideAction(avatar) {
+  for (const c of (avatar.activeConditions ?? [])) {
+    if (!c.conditionId) continue;
+    const condDef = await db.condition.findUnique({ where: { id: c.conditionId } });
+    if (!condDef?.overridesInput) continue;
+    return condDef.overrideAction ?? 'block';
+  }
+  return null;
+}
+
 async function init() {
   await initDb();
   await initRedis();
+
+  // Register Phase 2 maintenance tasks (executed in registration order each tick).
+  // Maintenance tasks run in the worker thread; register here, not in index.js.
+  registerMaintenanceTask('conditions', tickConditions);
+  registerMaintenanceTask('survival', survivalTick);
+  registerMaintenanceTask('world-scripts', emitOnTick);
+
+  // Register Phase 2 system handlers (worker-thread dispatch for phase actions).
+  registerSystemHandler('movement', navigationHandler);
+  registerSystemHandler('communication', communicationHandler);
+  registerSystemHandler('inventory', inventoryHandler);
+  registerSystemHandler('combat', combatHandler);
+  registerSystemHandler('on_condition_expire', conditionExpireHandler);
+  registerSystemHandler('on_horror',    horrorHandler);
+  registerSystemHandler('on_dread',     horrorHandler);
+  registerSystemHandler('on_mindbend',  horrorHandler);
+  registerSystemHandler('on_kill',      mobKillHandler);
+  registerSystemHandler('purchase',     purchaseHandler);
+  registerSystemHandler('sale',         saleHandler);
+
   const world = await db.worldState.findUnique({ where: { id: 1 } });
   tickCount = Number(world?.tickCount ?? 0n);
   logger.info('TICK', 'Tick engine initialized', { tickCount });
@@ -29,81 +138,46 @@ function scheduleTick() {
   setTimeout(processTick, delay);
 }
 
-async function drainPhaseQueue(phase) {
-  const key = `action:queue:phase${phase}`;
-  const raw = await redis.lRange(key, 0, -1);
-  await redis.del(key);
-  return raw.map(r => JSON.parse(r));
-}
-
-// Priority: combat(4) > movement(3) > inventory(2) > communication(1) > other(0)
-const PRIORITY = { combat: 4, movement: 3, inventory: 2, communication: 1 };
-
-function arbitrate(actions) {
-  const byResource = {};
-  for (const action of actions) {
-    const key = action.resourceKey ?? 'none';
-    if (!byResource[key]) byResource[key] = [];
-    byResource[key].push(action);
-  }
-
-  const resolved = [];
-  for (const [resource, group] of Object.entries(byResource)) {
-    if (group.length === 1) { resolved.push(group[0]); continue; }
-    group.sort((a, b) => {
-      const pa = PRIORITY[a.category] ?? 0;
-      const pb = PRIORITY[b.category] ?? 0;
-      if (pa !== pb) return pb - pa;
-      return Math.random() - 0.5;
-    });
-    resolved.push(group[0]);
-    for (const loser of group.slice(1)) {
-      logger.info('TICK', 'Action conflict resolved', { resource, winner: group[0].id, loser: loser.id });
-      parentPort.postMessage({ type: 'OUTPUT', sessionToken: loser.sessionToken, html: '<span class="system">Your action was interrupted.</span>' });
-    }
-  }
-  return resolved;
-}
-
-async function processAction(action, currentPhase) {
-  await runTrigger(
-    action.trigger,
-    { ...action.context, currentTick: tickCount, _currentPhase: currentPhase },
-    (tokens, html) => parentPort.postMessage({ type: 'OUTPUT_MULTI', tokens, html }),
-    (eventName, targetType, targetId, data, targetPhase) =>
-      emitEventToPhase(eventName, targetType, targetId, data, targetPhase, currentPhase),
-  );
-}
-
-// Phase-aware event emitter. Events targeting an earlier phase defer to next tick's phase 4.
-async function emitEventToPhase(eventName, targetType, targetId, data, targetPhase = 4, currentPhase = 4) {
-  const resolvedPhase = targetPhase < currentPhase ? 4 : targetPhase;
-  await enqueueAction({
-    phase: resolvedPhase,
-    trigger: eventName,
-    category: 'other',
-    resourceKey: `${targetType}:${targetId}`,
-    context: { ...data, targetType, targetId, _currentPhase: resolvedPhase },
-  });
-}
-
 async function processTick() {
   const start = Date.now();
   expectedTime += config.tickMs;
   tickCount++;
 
   try {
-    // Process four phases sequentially
-    for (let phase = 1; phase <= 4; phase++) {
-      const actions = await drainPhaseQueue(phase);
-      const resolved = arbitrate(actions);
-      for (const action of resolved) {
-        await processAction(action, phase);
+    // emit accumulates in-tick events for same-tick Response processing (phase 4)
+    const inTickEvents = [];
+    const emit = (entityType, entityId, eventName, data = {}) =>
+      inTickEvents.push({ entityType, entityId, eventName, data });
+
+    // Phases 1–3: Movement, Communication, Action
+    for (const phase of [1, 2, 3]) {
+      const actions = await drainPhase(phase);
+      if (actions.length === 0) continue;
+      const resolved = phase === 1 ? await _resolvePhase1Overrides(actions) : actions;
+      if (resolved.length === 0) continue;
+      const ordered = await orderPhase(resolved, (a) => resolveActionRoll(a));
+      for (const { action, result } of ordered) {
+        await applyAction(action, result, emit, tickCount);
       }
     }
 
-    // Tick conditions (after all phases)
-    await tickConditions(tickCount, (name, type, id, data) => emitEventToPhase(name, type, id, data, 4, 4));
+    // Phase 4: Response — drain in-tick events through the state machine, same tick.
+    // New events emitted by responses are appended; loop until empty (budget-capped).
+    const sendOutput = (tokens, html) => parentPort.postMessage({ type: 'OUTPUT_MULTI', tokens, html });
+    let guard = 0;
+    while (inTickEvents.length && guard++ < config.maxResponseEventsPerTick) {
+      const ev = inTickEvents.shift();
+      const evContext = { ...ev.data, targetType: ev.entityType, targetId: ev.entityId, currentTick: tickCount };
+      const responseHandler = SYSTEM_HANDLERS.get(ev.eventName);
+      if (responseHandler?.apply) {
+        await responseHandler.apply({ context: evContext }, {}, emit, tickCount, sendOutput);
+      } else {
+        await runTrigger(ev.eventName, evContext, sendOutput, emit);
+      }
+    }
+
+    // Phase 5: Maintenance
+    await runMaintenance(tickCount, emit);
 
     // Tick world clocks
     await tickClocks();

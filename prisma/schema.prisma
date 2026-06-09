@@ -167,8 +167,10 @@ model Exit {
   regionId       Int
   fromLocationId Int
   toLocationId   Int
+  toRegionId     Int?
   direction      String
   conditionId    Int?
+  isState        Json     @default("{}")
   aliases        Json     @default("{}")
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -187,6 +189,7 @@ model ObjectTemplate {
   regionId   Int?
   name       String
   type       ObjectType
+  weight     Int        @default(1)
   baseSchema Json       @default("{}")
   scriptId   Int?
   lootTable  Json       @default("[]")
@@ -218,6 +221,22 @@ model ObjectInstance {
   template  ObjectTemplate  @relation(fields: [templateId], references: [id])
 
   @@unique([regionId, id])
+}
+
+// ─── SKILL DEFINITIONS ───────────────────────────────────────────────────────
+
+model SkillDefinition {
+  id                Int      @id @default(autoincrement())
+  name              String   @unique
+  stat              String
+  rollContribution  Int
+  autoSucceedSimple Boolean  @default(false)
+  prerequisites     Json     @default("[]")
+  unlocksActions    Json     @default("[]")
+  attachedToObject  Boolean  @default(false)
+  regionScoped      Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  metadata          Json?
 }
 
 // ─── PERMISSIONS ─────────────────────────────────────────────────────────────

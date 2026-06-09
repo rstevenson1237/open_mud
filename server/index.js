@@ -4,6 +4,13 @@ import { initDb } from './db/postgres.js';
 import { initRedis } from './db/redis.js';
 import { startWsServer, handleWorkerMessage } from './ws/server.js';
 import { registerBuiltins } from './interface/builtins.js';
+import { register as registerCreation } from './interface/cmd_creation.js';
+import { register as registerNavigation } from './interface/cmd_navigation.js';
+import { register as registerCommunication } from './interface/cmd_communication.js';
+import { register as registerInventory } from './interface/cmd_inventory.js';
+import { register as registerCombat } from './interface/cmd_combat.js';
+import { register as registerBuilder } from './interface/cmd_builder.js';
+import { register as registerEconomy } from './interface/cmd_economy.js';
 import { logger } from './log/logger.js';
 
 async function main() {
@@ -12,6 +19,15 @@ async function main() {
   await initDb();
   await initRedis();
   registerBuiltins();
+
+  // Phase 2 command registrations (order matters for alias resolution)
+  registerCreation();
+  registerNavigation();
+  registerCommunication();
+  registerInventory();
+  registerCombat();
+  registerBuilder();
+  registerEconomy();
 
   const { sessions } = startWsServer(config.port);
 

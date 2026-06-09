@@ -6,13 +6,14 @@ import { db } from '../db/postgres.js';
 import { routeInput } from '../interface/router.js';
 import { renderOutput, buildStatusPayload } from '../interface/output.js';
 import { initSessionPrng, clearSessionPrng } from '../engine/resolver.js';
+import { parseDSL } from '../engine/dsl/parser.js';
 import { logger } from '../log/logger.js';
 import { config } from '../config.js';
 
 const sessions = new Map(); // sessionToken → WebSocket
 
 export function startWsServer(port) {
-  const httpServer = createServer((req, res) => {
+  const httpServer = createServer(async (req, res) => {
     if (req.url === '/' || req.url === '/index.html') {
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end(readFileSync('./client/index.html'));
@@ -22,9 +23,8 @@ export function startWsServer(port) {
     } else if (req.url === '/terminal.css') {
       res.writeHead(200, { 'Content-Type': 'text/css' });
       res.end(readFileSync('./client/terminal.css'));
-    } else if (req.method === 'POST' && req.url === '/upload/script') {
-      res.writeHead(501, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Script file upload not yet implemented. Available in Phase 2.' }));
+    } else if (req.method === 'POST' && req.url?.startsWith('/upload/script')) {
+      await handleScriptUpload(req, res);
     } else {
       res.writeHead(404); res.end();
     }
@@ -47,6 +47,30 @@ export function startWsServer(port) {
       if (msg.type === 'CMD' && sessionToken) {
         const session = await loadSession(sessionToken);
         if (!session) { send(ws, { type: 'ERROR', message: 'Session expired.' }); return; }
+
+        // editBuffer mode: accumulate lines for multiline script editor
+        if (session.editBuffer !== undefined) {
+          const line = (msg.input ?? '').trim();
+          if (line === '!cancel') {
+            delete session.editBuffer;
+            delete session.editTarget;
+            await redis.set(`session:${sessionToken}`, JSON.stringify(session));
+            send(ws, { type: 'OUTPUT', html: renderOutput('[dim]Edit cancelled.[/]') });
+          } else if (line === '.') {
+            const { finalizeEdit } = await import('../interface/cmd_builder.js');
+            const html = await finalizeEdit(session);
+            delete session.editBuffer;
+            delete session.editTarget;
+            await redis.set(`session:${sessionToken}`, JSON.stringify(session));
+            send(ws, { type: 'OUTPUT', html });
+          } else {
+            session.editBuffer.push(line);
+            await redis.set(`session:${sessionToken}`, JSON.stringify(session));
+            send(ws, { type: 'OUTPUT', html: renderOutput(`[dim]${session.editBuffer.length}:[/] ${line}`) });
+          }
+          return;
+        }
+
         const result = await routeInput(msg.input, session);
         if (result.output) send(ws, { type: 'OUTPUT', html: result.output });
         if (result.error)  send(ws, { type: 'OUTPUT', html: result.error });
@@ -73,6 +97,81 @@ export function startWsServer(port) {
   });
 
   return { wss, sessions };
+}
+
+async function handleScriptUpload(req, res) {
+  const jsonErr = (code, msg) => {
+    res.writeHead(code, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: msg }));
+  };
+
+  // Parse query params
+  const url = new URL(req.url, `http://localhost`);
+  const token = url.searchParams.get('token');
+  const attachType = url.searchParams.get('attachType');
+  const attachId   = url.searchParams.get('attachId');
+
+  if (!token)      return jsonErr(401, 'Missing ?token=');
+  if (!attachType) return jsonErr(400, 'Missing ?attachType= (e.g. LOCATION)');
+  if (!attachId)   return jsonErr(400, 'Missing ?attachId= (e.g. regionId:locationId)');
+
+  // Verify session
+  const sessionRaw = await redis.get(`session:${token}`);
+  if (!sessionRaw) return jsonErr(401, 'Invalid or expired session token.');
+  const session = JSON.parse(sessionRaw);
+
+  const UPLOAD_MIN_RANK = ['POWER_USER', 'ADMIN', 'ROOT'];
+  if (!UPLOAD_MIN_RANK.includes(session.userType)) {
+    return jsonErr(403, 'Insufficient permissions. POWER_USER or above required.');
+  }
+
+  // Read body (raw DSL text, max 64 KB)
+  const MAX_BYTES = 65536;
+  const body = await new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on('data', chunk => {
+      total += chunk.length;
+      if (total > MAX_BYTES) { reject(new Error('Payload too large')); }
+      else chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  }).catch(e => { jsonErr(413, e.message); return null; });
+  if (body === null) return;
+
+  // Parse DSL
+  const parsed = parseDSL(body);
+  if (!parsed.ok) {
+    res.writeHead(422, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'DSL parse errors', details: parsed.errors }));
+    return;
+  }
+
+  // Save script
+  let script = await db.script.findFirst({ where: { attachedToType: attachType, attachedToId: attachId } });
+  if (script) {
+    script = await db.script.update({ where: { id: script.id }, data: { body: parsed.body } });
+  } else {
+    script = await db.script.create({ data: { attachedToType: attachType, attachedToId: attachId, body: parsed.body } });
+  }
+
+  // Auto-attach to location if LOCATION type
+  if (attachType === 'LOCATION') {
+    const parts = attachId.split(':');
+    const regionId = parseInt(parts[0]);
+    const locationId = parseInt(parts[1]);
+    if (!isNaN(regionId) && !isNaN(locationId)) {
+      await db.location.update({
+        where: { regionId_id: { regionId, id: locationId } },
+        data: { scriptId: script.id },
+      });
+    }
+  }
+
+  logger.audit('UPLOAD', 'script_upload', { userId: session.userId, attachType, attachId, scriptId: script.id });
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: true, scriptId: script.id, rules: parsed.body.rules?.length ?? 0 }));
 }
 
 async function handleAuth(ws, msg) {
