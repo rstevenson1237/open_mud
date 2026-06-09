@@ -2,8 +2,9 @@
 import { redis } from '../db/redis.js';
 import { db } from '../db/postgres.js';
 import { markDirty } from '../db/sync.js';
-import { hasCondition } from './conditions.js';
-import { resolve } from './resolver.js';
+import { applyCondition, removeCondition, hasCondition } from './conditions.js';
+import { resolve, resolveOpposed } from './resolver.js';
+import { getRollTarget } from './stats.js';
 import { renderOutput } from '../interface/output.js';
 import { logger } from '../log/logger.js';
 
@@ -77,8 +78,9 @@ export const navigationHandler = {
 
     if (moveType === 'go') {
       await _applyGo(context, emit, sendOutput);
+    } else if (moveType === 'flee') {
+      await _applyFlee(context, emit, tick, sendOutput);
     }
-    // 'flee' and 'teleport' handled in TASK 10 / extended here when added.
   },
 };
 
@@ -164,4 +166,93 @@ async function _applyGo(context, emit, sendOutput) {
     to: `${destRegionId}:${destLocationId}`,
     direction,
   });
+}
+
+// ─── Flee (phase 1 movement) ──────────────────────────────────────────────────
+
+async function _applyFlee(context, emit, tick, sendOutput) {
+  const { actorAvatarId, actorSessionToken, regionId, locationId, combatTarget } = context;
+  const rId = parseInt(regionId);
+  const lId = parseInt(locationId);
+
+  const raw = await redis.get(`avatar:${actorAvatarId}`);
+  if (!raw) return;
+  const fleer = JSON.parse(raw);
+
+  if (!hasCondition(fleer, 'in_combat')) {
+    sendOutput([actorSessionToken], renderOutput('[color=yellow]You are not in combat.[/]'));
+    return;
+  }
+
+  // Determine chaser token and stats for opposed roll
+  let chaserToken = null, chaserPhyPre = 20;
+  if (combatTarget?.type === 'avatar') {
+    const tUser = await db.user.findFirst({
+      where: { avatars: { some: { id: combatTarget.avatarId } } },
+      select: { sessionToken: true },
+    });
+    chaserToken = tUser?.sessionToken ?? null;
+    const tRaw = chaserToken ? await redis.get(`avatar:${combatTarget.avatarId}`) : null;
+    if (tRaw) {
+      const chaser = JSON.parse(tRaw);
+      chaserPhyPre = Math.min(chaser.stats?.phy_pre?.value ?? 20, 40);
+    }
+  }
+  // For mob chasers, chaserToken = null → Math.random() in resolveOpposed
+
+  const fleerPhyPre = Math.min(fleer.stats?.phy_pre?.value ?? 20, 40);
+
+  // Flee: fleer wins ties — pass roles as (chaser, fleer) so tie → defender (fleer) wins
+  const opposed = resolveOpposed(chaserToken, actorSessionToken, chaserPhyPre, fleerPhyPre);
+  const fleerWins = opposed.winner === 'defender';
+
+  if (!fleerWins) {
+    sendOutput([actorSessionToken], renderOutput('[color=red]You fail to escape![/]'));
+    emit('avatar', String(actorAvatarId), 'on_flee', { actorAvatarId, actorSessionToken, success: false });
+    return;
+  }
+
+  // Clear in_combat
+  await removeCondition('avatar', actorAvatarId, 'in_combat');
+  // Clear state.combatTarget
+  const avReloaded = JSON.parse(await redis.get(`avatar:${actorAvatarId}`) ?? '{}');
+  if (avReloaded.state) delete avReloaded.state.combatTarget;
+  await redis.set(`avatar:${actorAvatarId}`, JSON.stringify(avReloaded));
+  await markDirty('avatar', actorAvatarId);
+
+  // Move to a random unlocked exit
+  const exits = await db.exit.findMany({ where: { regionId: rId, fromLocationId: lId } });
+  const unlocked = exits.filter(e => !(e.isState?.locked));
+  if (unlocked.length === 0) {
+    sendOutput([actorSessionToken], renderOutput('[color=yellow]You escape but find no way out![/]'));
+    emit('avatar', String(actorAvatarId), 'on_flee', { actorAvatarId, actorSessionToken, success: true });
+    return;
+  }
+
+  const exit = unlocked[Math.floor(Math.random() * unlocked.length)];
+  const destRegionId = exit.toRegionId ?? rId;
+  const destLocationId = exit.toLocationId;
+
+  const avFinal = JSON.parse(await redis.get(`avatar:${actorAvatarId}`) ?? '{}');
+  let visitedRegions = Array.isArray(avFinal.visitedRegions) ? [...avFinal.visitedRegions] : [];
+  if (!visitedRegions.includes(destRegionId)) visitedRegions.push(destRegionId);
+  avFinal.regionId = destRegionId;
+  avFinal.locationId = destLocationId;
+  avFinal.visitedRegions = visitedRegions;
+  await redis.set(`avatar:${actorAvatarId}`, JSON.stringify(avFinal));
+  await markDirty('avatar', actorAvatarId);
+
+  const sessionRaw = await redis.get(`session:${actorSessionToken}`);
+  if (sessionRaw) {
+    const session = JSON.parse(sessionRaw);
+    session.regionId = destRegionId;
+    session.locationId = destLocationId;
+    await redis.set(`session:${actorSessionToken}`, JSON.stringify(session));
+  }
+
+  const lookHtml = await renderLook(destRegionId, destLocationId, actorAvatarId);
+  sendOutput([actorSessionToken], renderOutput(`[color=green]You escape![/]\n`) + lookHtml);
+
+  emit('avatar', String(actorAvatarId), 'on_flee', { actorAvatarId, actorSessionToken, success: true, destRegionId, destLocationId });
+  logger.info('NAVIGATION', 'avatar_fled', { avatarId: actorAvatarId, to: `${destRegionId}:${destLocationId}` });
 }

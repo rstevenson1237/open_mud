@@ -13,6 +13,7 @@ import { navigationHandler } from '../engine/navigation.js';
 import { communicationHandler } from '../engine/communication.js';
 import { inventoryHandler } from '../engine/inventory.js';
 import { survivalTick } from '../engine/survival.js';
+import { combatHandler, conditionExpireHandler } from '../engine/combat.js';
 import { drainPhase, enqueueAction } from './queue.js';
 import { logger } from '../log/logger.js';
 
@@ -67,6 +68,8 @@ async function init() {
   registerSystemHandler('movement', navigationHandler);
   registerSystemHandler('communication', communicationHandler);
   registerSystemHandler('inventory', inventoryHandler);
+  registerSystemHandler('combat', combatHandler);
+  registerSystemHandler('on_condition_expire', conditionExpireHandler);
 
   const world = await db.worldState.findUnique({ where: { id: 1 } });
   tickCount = Number(world?.tickCount ?? 0n);
@@ -103,15 +106,17 @@ async function processTick() {
 
     // Phase 4: Response — drain in-tick events through the state machine, same tick.
     // New events emitted by responses are appended; loop until empty (budget-capped).
+    const sendOutput = (tokens, html) => parentPort.postMessage({ type: 'OUTPUT_MULTI', tokens, html });
     let guard = 0;
     while (inTickEvents.length && guard++ < config.maxResponseEventsPerTick) {
       const ev = inTickEvents.shift();
-      await runTrigger(
-        ev.eventName,
-        { ...ev.data, targetType: ev.entityType, targetId: ev.entityId, currentTick: tickCount },
-        (tokens, html) => parentPort.postMessage({ type: 'OUTPUT_MULTI', tokens, html }),
-        emit,
-      );
+      const evContext = { ...ev.data, targetType: ev.entityType, targetId: ev.entityId, currentTick: tickCount };
+      const responseHandler = SYSTEM_HANDLERS.get(ev.eventName);
+      if (responseHandler?.apply) {
+        await responseHandler.apply({ context: evContext }, {}, emit, tickCount, sendOutput);
+      } else {
+        await runTrigger(ev.eventName, evContext, sendOutput, emit);
+      }
     }
 
     // Phase 5: Maintenance
