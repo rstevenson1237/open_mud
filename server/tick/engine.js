@@ -12,6 +12,7 @@ import { tickConditions } from '../engine/conditions.js';
 import { navigationHandler } from '../engine/navigation.js';
 import { communicationHandler } from '../engine/communication.js';
 import { inventoryHandler } from '../engine/inventory.js';
+import { survivalTick } from '../engine/survival.js';
 import { drainPhase, enqueueAction } from './queue.js';
 import { logger } from '../log/logger.js';
 
@@ -59,7 +60,7 @@ async function init() {
   // Register Phase 2 maintenance tasks (executed in registration order each tick).
   // Maintenance tasks run in the worker thread; register here, not in index.js.
   registerMaintenanceTask('conditions', tickConditions);
-  // 'survival' registered by TASK 9 — import survivalTick from '../engine/survival.js'
+  registerMaintenanceTask('survival', survivalTick);
   // 'world-scripts' registered by TASK 12 — import emitOnTick from '../engine/mobs.js'
 
   // Register Phase 2 system handlers (worker-thread dispatch for phase actions).
