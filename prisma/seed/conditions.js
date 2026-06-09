@@ -36,6 +36,7 @@ const CONDITIONS = [
   // ── Equipment / combat ───────────────────────────────────────────────────
   { name: 'armor_broken',  type: 'MECHANICAL', affectedStat: null, modifier: 0, defaultDurationTicks: PERM, overridesInput: false, overrideAction: null },
   { name: 'in_combat',     type: 'MECHANICAL', affectedStat: null, modifier: 0, defaultDurationTicks: PERM, overridesInput: false, overrideAction: null },
+  { name: 'dead',          type: 'MECHANICAL', affectedStat: null, modifier: 0, defaultDurationTicks: PERM, overridesInput: true,  overrideAction: null },
 
   // ── Hunger / rest ─────────────────────────────────────────────────────────
   { name: 'hungry',        type: 'GAME',       affectedStat: 'phy_res',           modifier: -2, defaultDurationTicks: PERM, overridesInput: false, overrideAction: null },

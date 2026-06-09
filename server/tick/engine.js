@@ -14,6 +14,7 @@ import { communicationHandler } from '../engine/communication.js';
 import { inventoryHandler } from '../engine/inventory.js';
 import { survivalTick } from '../engine/survival.js';
 import { combatHandler, conditionExpireHandler, horrorHandler } from '../engine/combat.js';
+import { emitOnTick, mobKillHandler } from '../engine/mobs.js';
 import { drainPhase, enqueueAction } from './queue.js';
 import { logger } from '../log/logger.js';
 
@@ -109,7 +110,7 @@ async function init() {
   // Maintenance tasks run in the worker thread; register here, not in index.js.
   registerMaintenanceTask('conditions', tickConditions);
   registerMaintenanceTask('survival', survivalTick);
-  // 'world-scripts' registered by TASK 12 — import emitOnTick from '../engine/mobs.js'
+  registerMaintenanceTask('world-scripts', emitOnTick);
 
   // Register Phase 2 system handlers (worker-thread dispatch for phase actions).
   registerSystemHandler('movement', navigationHandler);
@@ -120,6 +121,7 @@ async function init() {
   registerSystemHandler('on_horror',    horrorHandler);
   registerSystemHandler('on_dread',     horrorHandler);
   registerSystemHandler('on_mindbend',  horrorHandler);
+  registerSystemHandler('on_kill',      mobKillHandler);
 
   const world = await db.worldState.findUnique({ where: { id: 1 } });
   tickCount = Number(world?.tickCount ?? 0n);
