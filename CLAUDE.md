@@ -97,7 +97,16 @@ Critical ones: `DATABASE_URL`, `REDIS_URL`, `PORT=3000`, `TICK_MS=6000`.
   Server, DB schema, tick engine (4-phase), permission resolver, state machine,
   condition engine (with input override hook), roll engine, DSL parser
   (subroutine blocks), WS server, browser UI.
-- **Phase 2** — Game interface. READY TO BEGIN.
+- **Phase 2** — Game interface. COMPLETE.
+  Five-phase tick pipeline (Movement/Communication/Action/Response/Maintenance),
+  per-phase Redis queues, SYSTEM_HANDLERS dispatch map, registerMaintenanceTask.
+  Commands: navigation (look/go/exits), communication (say/shout/whisper/tell/alert),
+  inventory (get/drop/give/wear/open/close/examine/use), combat (attack/flee),
+  builder (create/describe/zone/script/edit/lock/grant/config/…), economy
+  (coins/buy/sell/vendor/trade stub). Engine modules: navigation, communication,
+  inventory, combat (with horror/sanity), survival, mobs (AI + kill handler),
+  economy (purchase/sale). POST /upload/script endpoint. Conditions library seeded.
+  DB column whitelist for hot-state flush. Session editBuffer for multiline DSL editor.
 - **Phase 3** — Content building and delivery. NOT STARTED.
 - **Phase 4** — Future stubs. NOT STARTED.
 
