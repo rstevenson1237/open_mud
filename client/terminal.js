@@ -12,7 +12,9 @@
     ws = new WebSocket(`${proto}://${location.host}`);
 
     ws.onopen = () => {
-      appendLine('<span class="system">Connected. Use /login username password to authenticate.</span>');
+      appendLine('<span class="system">Connected.</span>');
+      appendLine('<span class="dim">  /login username password  — sign in</span>');
+      appendLine('<span class="dim">  /register username password  — create account</span>');
     };
 
     ws.onmessage = (evt) => {
@@ -106,12 +108,15 @@
       histIdx = -1;
       cmdInput.value = '';
 
-      // Local /login handling — never sent raw to server
+      // Local auth handling — never sent raw to server
       if (input.startsWith('/login ')) {
         const parts = input.split(' ');
-        const username = parts[1];
-        const password = parts[2];
-        if (ws?.readyState === 1) ws.send(JSON.stringify({ type: 'AUTH', username, password }));
+        if (ws?.readyState === 1) ws.send(JSON.stringify({ type: 'AUTH', username: parts[1], password: parts[2] }));
+        return;
+      }
+      if (input.startsWith('/register ')) {
+        const parts = input.split(' ');
+        if (ws?.readyState === 1) ws.send(JSON.stringify({ type: 'REGISTER', username: parts[1], password: parts[2] }));
         return;
       }
 
