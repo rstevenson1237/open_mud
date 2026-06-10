@@ -44,6 +44,11 @@ export function startWsServer(port) {
         return;
       }
 
+      if (msg.type === 'REGISTER') {
+        sessionToken = await handleRegister(ws, msg);
+        return;
+      }
+
       if (msg.type === 'CMD' && sessionToken) {
         const session = await loadSession(sessionToken);
         if (!session) { send(ws, { type: 'ERROR', message: 'Session expired.' }); return; }
@@ -208,6 +213,64 @@ async function handleAuth(ws, msg) {
 
   send(ws, { type: 'AUTH_OK', message: renderOutput(`[b]Connected.[/] Welcome, ${user.username}.`) });
   logger.info('WS', 'User authenticated', { userId: user.id, userType: user.type });
+  return token;
+}
+
+const USERNAME_RE = /^[A-Za-z0-9_-]{2,30}$/;
+
+async function handleRegister(ws, msg) {
+  const { username, password } = msg;
+
+  if (!username || !USERNAME_RE.test(username)) {
+    send(ws, { type: 'AUTH_FAIL', message: 'Username must be 2–30 characters (letters, numbers, _ -).' });
+    return null;
+  }
+  if (!password || password.length < 4) {
+    send(ws, { type: 'AUTH_FAIL', message: 'Password must be at least 4 characters.' });
+    return null;
+  }
+
+  const existing = await db.user.findUnique({ where: { username } });
+  if (existing) {
+    send(ws, { type: 'AUTH_FAIL', message: `Username '${username}' is already taken.` });
+    return null;
+  }
+
+  const maxRow = await db.user.findFirst({ orderBy: { id: 'desc' }, select: { id: true } });
+  const newId = (maxRow?.id ?? 0) + 1;
+
+  const user = await db.user.create({
+    data: {
+      id: newId,
+      username,
+      passwordHash: password,  // Phase 2 replaces with bcrypt
+      type: 'CHARACTER',
+      aliases: {},
+      metadata: {},
+    },
+  });
+
+  logger.audit('REGISTER', 'user_created', { userId: user.id, username });
+
+  // Log in immediately after registration
+  const token = generateToken();
+  const expiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  await db.user.update({ where: { id: user.id }, data: { sessionToken: token, sessionExpiry: expiry } });
+  await redis.set(`session:${token}`, JSON.stringify({
+    userId: user.id,
+    userType: user.type,
+    avatarId: null,
+    sessionToken: token,
+    regionId: null,
+    locationId: null,
+    userAliases: {},
+    connectedAt: Date.now(),
+  }));
+
+  initSessionPrng(token);
+  sessions.set(token, ws);
+
+  send(ws, { type: 'AUTH_OK', message: renderOutput(`[b]Account created.[/] Welcome, ${username}! Use [b]/new-avatar {name}[/] to create your character.`) });
   return token;
 }
 
