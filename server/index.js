@@ -11,6 +11,7 @@ import { register as registerInventory } from './interface/cmd_inventory.js';
 import { register as registerCombat } from './interface/cmd_combat.js';
 import { register as registerBuilder } from './interface/cmd_builder.js';
 import { register as registerEconomy } from './interface/cmd_economy.js';
+import { register as registerAdmin } from './interface/cmd_admin.js';
 import { logger } from './log/logger.js';
 
 async function main() {
@@ -28,6 +29,7 @@ async function main() {
   registerCombat();
   registerBuilder();
   registerEconomy();
+  registerAdmin();
 
   const { sessions } = startWsServer(config.port);
 

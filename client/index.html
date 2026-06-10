@@ -8,20 +8,44 @@
 </head>
 <body>
   <div id="app">
-    <div id="status-bar">
-      <span id="s-name"></span>
-      <span id="s-wounds"></span>
-      <span id="s-stress"></span>
-      <span id="s-hunger"></span>
-      <span id="s-rest"></span>
-      <span id="s-location"></span>
-      <span id="s-zone"></span>
-      <span id="s-conditions"></span>
+    <div id="left-pane">
+      <div id="output" role="log" aria-live="polite"></div>
+      <div id="input-row">
+        <span id="prompt">&gt;</span>
+        <input id="cmd" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Command input">
+      </div>
     </div>
-    <div id="output" role="log" aria-live="polite"></div>
-    <div id="input-row">
-      <span id="prompt">&gt;</span>
-      <input id="cmd" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Command input">
+    <div id="right-pane">
+      <div id="status-panel">
+        <div id="sp-name"></div>
+        <div id="sp-location"></div>
+        <div id="sp-zone"></div>
+        <div class="sp-section">
+          <div class="sp-label">VITALS</div>
+          <div class="sp-track" id="sp-wounds"></div>
+          <div class="sp-track" id="sp-sanity"></div>
+          <div class="sp-track" id="sp-stress"></div>
+          <div class="sp-track" id="sp-hunger"></div>
+          <div class="sp-track" id="sp-rest"></div>
+        </div>
+        <div class="sp-section">
+          <div class="sp-label">STATS</div>
+          <table id="sp-stats-grid">
+            <thead>
+              <tr><th></th><th>FOR</th><th>PRE</th><th>RES</th></tr>
+            </thead>
+            <tbody>
+              <tr><td class="sp-major">PHY</td><td id="sp-phy_for"></td><td id="sp-phy_pre"></td><td id="sp-phy_res"></td></tr>
+              <tr><td class="sp-major">MEN</td><td id="sp-men_for"></td><td id="sp-men_pre"></td><td id="sp-men_res"></td></tr>
+              <tr><td class="sp-major">SOC</td><td id="sp-soc_for"></td><td id="sp-soc_pre"></td><td id="sp-soc_res"></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="sp-section">
+          <div class="sp-label">CONDITIONS</div>
+          <div id="sp-conditions">—</div>
+        </div>
+      </div>
     </div>
   </div>
   <script src="/terminal.js"></script>

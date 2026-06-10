@@ -5,7 +5,8 @@
   --fg: #c8c8c8;
   --prompt: #4a9;
   --dim: #555;
-  --status-bg: #111;
+  --status-bg: #0a0a0a;
+  --border: #222;
   --font: 'Courier New', Courier, monospace;
 }
 
@@ -20,20 +21,31 @@ body {
   overflow: hidden;
 }
 
-#app { display: flex; flex-direction: column; height: 100%; }
+/* ── Two-pane layout ──────────────────────────────────────── */
 
-#status-bar {
-  background: var(--status-bg);
-  padding: 4px 10px;
-  font-size: 12px;
+#app {
   display: flex;
-  gap: 16px;
-  flex-wrap: wrap;
-  border-bottom: 1px solid #222;
-  flex-shrink: 0;
+  flex-direction: row;
+  height: 100%;
+  overflow: hidden;
 }
-#status-bar span { color: #888; }
-#status-bar span.active { color: var(--fg); }
+
+#left-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  border-right: 1px solid var(--border);
+}
+
+#right-pane {
+  flex: 0 0 240px;
+  min-width: 180px;
+  background: var(--status-bg);
+  overflow-y: auto;
+}
+
+/* ── Terminal output & input ──────────────────────────────── */
 
 #output {
   flex: 1;
@@ -58,7 +70,7 @@ body {
   align-items: center;
   gap: 6px;
   padding: 6px 10px;
-  border-top: 1px solid #222;
+  border-top: 1px solid var(--border);
   flex-shrink: 0;
 }
 #prompt { color: var(--prompt); user-select: none; }
@@ -71,4 +83,105 @@ body {
   font-family: var(--font);
   font-size: 14px;
   caret-color: var(--prompt);
+}
+
+/* ── Status panel ─────────────────────────────────────────── */
+
+#status-panel {
+  padding: 10px 8px;
+  font-size: 12px;
+}
+
+#sp-name {
+  font-size: 13px;
+  color: var(--fg);
+  font-weight: bold;
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#sp-location {
+  color: #999;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 2px;
+}
+
+#sp-zone {
+  color: #555;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+.sp-section {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid #1e1e1e;
+}
+
+.sp-label {
+  color: #444;
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  margin-bottom: 4px;
+}
+
+/* Vitals rows */
+.sp-track {
+  color: #888;
+  font-size: 11px;
+  padding: 1px 0;
+  display: flex;
+  justify-content: space-between;
+}
+.sp-track.danger { color: #f66; }
+.sp-track.warn   { color: #fa0; }
+
+/* Stats 3×3 grid */
+#sp-stats-grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+#sp-stats-grid th {
+  color: #444;
+  font-size: 9px;
+  font-weight: normal;
+  letter-spacing: 0.5px;
+  text-align: center;
+  padding-bottom: 2px;
+}
+#sp-stats-grid td {
+  text-align: center;
+  padding: 1px 2px;
+  color: var(--fg);
+}
+#sp-stats-grid td.sp-major {
+  text-align: left;
+  color: #555;
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  padding-right: 4px;
+}
+
+/* Conditions */
+#sp-conditions {
+  color: #888;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-line;
+}
+#sp-conditions.has-conditions { color: #fa0; }
+
+/* ── Narrow viewport: stack panes ─────────────────────────── */
+
+@media (max-width: 600px) {
+  #app { flex-direction: column; }
+  #left-pane { flex: 1 1 auto; border-right: none; border-bottom: 1px solid var(--border); }
+  #right-pane { flex: 0 0 auto; max-height: 38vh; }
 }

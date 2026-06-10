@@ -183,6 +183,11 @@ async function handleAuth(ws, msg) {
   const valid = user.passwordHash === password;
   if (!valid) { send(ws, { type: 'AUTH_FAIL', message: 'Invalid credentials.' }); return null; }
 
+  if (user.metadata?.locked) {
+    send(ws, { type: 'AUTH_FAIL', message: 'This account has been locked by an administrator.' });
+    return null;
+  }
+
   const token = generateToken();
   const expiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
 

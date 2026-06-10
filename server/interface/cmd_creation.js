@@ -80,11 +80,11 @@ async function _validateName(ctx, session, name) {
 async function _applyStats(ctx, session, nums) {
   const { name, pointBuyConfig: pbCfg } = session.creationWizard;
 
-  // Map 9 numbers to stat keys in order
-  const allocation = Object.fromEntries(STAT_KEYS.map((k, i) => [k, nums[i]]));
+  // Map 9 numbers to stat keys as final values
+  const finalValues = Object.fromEntries(STAT_KEYS.map((k, i) => [k, nums[i]]));
 
   const base = defaultStats();
-  const result = applyPointBuy(base, allocation, pbCfg);
+  const result = applyPointBuy(base, finalValues, pbCfg);
   if (!result.ok) {
     return { output: renderOutput(`[color=red]${_esc(result.reason)}[/]\n${_statPrompt(name, pbCfg)}`) };
   }
@@ -164,15 +164,18 @@ async function _applyStats(ctx, session, nums) {
 }
 
 function _statPrompt(name, pbCfg = {}) {
-  const maj = pbCfg.majorBudget ?? 30;
-  const min = pbCfg.minorBudgetPerMajor ?? 20;
+  const budget = pbCfg.majorBudget ?? 30;
+  const statMin = pbCfg.statMin ?? 10;
+  const statMax = pbCfg.statMax ?? 40;
   return (
     `[b]Creating avatar:[/] ${_esc(name)}\n` +
-    `Allocate your stats — ${maj} points total, max ${min} per major group.\n` +
-    `Baseline: all stats start at 20. Enter points above baseline.\n` +
+    `Enter your 9 final stat values. Rules:\n` +
+    `  • Each stat: ${statMin}–${statMax}  •  Points above 20 (total): max ${budget}\n` +
+    `  • Within each major (PHY/MEN/SOC): free zero-sum shifts up to ±10 per stat\n` +
+    `    (reduce one minor to boost another in the same group at no cost)\n` +
     `Order: phy_for phy_pre phy_res  men_for men_pre men_res  soc_for soc_pre soc_res\n` +
-    `Example: /new-avatar 10 5 5 5 5 0 0 0 0\n` +
-    `(Physical:20, Mental:10, Social:0 — total 30)`
+    `Example: /new-avatar 30 20 20  25 20 15  20 20 20\n` +
+    `(PHY: +10 buy; MEN: +5 buy, −5 free shift; SOC: unchanged)`
   );
 }
 
