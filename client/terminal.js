@@ -44,23 +44,56 @@
     userScrolled = output.scrollTop + output.clientHeight < output.scrollHeight - 10;
   });
 
-  // ── Status bar ─────────────────────────────────────────────────────────────
+  // ── Status panel ───────────────────────────────────────────────────────────
+
+  const STAT_KEYS = [
+    'phy_for','phy_pre','phy_res',
+    'men_for','men_pre','men_res',
+    'soc_for','soc_pre','soc_res',
+  ];
+
   function updateStatus(data) {
-    setText('s-name',       data.name ?? '');
-    setText('s-wounds',     data.wounds != null ? `WND:${data.wounds}` : '');
-    setText('s-stress',     data.stress != null ? `STR:${data.stress}` : '');
-    setText('s-hunger',     data.hunger != null ? `HNG:${data.hunger}` : '');
-    setText('s-rest',       data.rest   != null ? `RST:${data.rest}`   : '');
-    setText('s-location',   data.locationName ?? '');
-    setText('s-zone',       data.zoneType ?? '');
-    setText('s-conditions', (data.conditions ?? []).join(' · '));
+    // Header: name / location / zone
+    setEl('sp-name',     data.name ?? '');
+    setEl('sp-location', data.locationName ? `@ ${data.locationName}` : '');
+    setEl('sp-zone',     data.zoneType ?? '');
+
+    // Vitals
+    _setTrack('sp-wounds', 'WND',    data.wounds,  data.woundMax  ?? 3,  data.woundMax  ?? 3);
+    _setTrack('sp-sanity', 'SAN',    data.sanity,  data.sanityMax ?? 3,  data.sanityMax ?? 3);
+    _setTrack('sp-stress', 'STR',    data.stress,  null,                 20);
+    _setTrack('sp-hunger', 'HNG',    data.hunger,  null,                 100);
+    _setTrack('sp-rest',   'RST',    data.rest,    null,                 100);
+
+    // Stats 3×3 grid
+    if (data.stats) {
+      for (const k of STAT_KEYS) {
+        const el = document.getElementById(`sp-${k}`);
+        if (el) el.textContent = data.stats[k] ?? '—';
+      }
+    }
+
+    // Conditions
+    const condEl = document.getElementById('sp-conditions');
+    if (condEl) {
+      const conds = data.conditions ?? [];
+      condEl.textContent = conds.length ? conds.join('\n') : '—';
+      condEl.className = conds.length ? 'has-conditions' : '';
+    }
   }
 
-  function setText(id, text) {
+  function _setTrack(id, label, value, max, warnAt) {
     const el = document.getElementById(id);
     if (!el) return;
-    el.textContent = text;
-    el.className = text ? 'active' : '';
+    if (value == null) { el.textContent = ''; el.className = 'sp-track'; return; }
+    const display = max != null ? `${label}: ${value}/${max}` : `${label}: ${value}`;
+    el.textContent = display;
+    el.className = 'sp-track' + (value >= warnAt ? ' danger' : value >= warnAt * 0.6 ? ' warn' : '');
+  }
+
+  function setEl(id, text) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
   }
 
   // ── Command input ──────────────────────────────────────────────────────────
@@ -97,7 +130,6 @@
       e.preventDefault();
     }
 
-    // Basic autocomplete stub — Phase 2 populates command list
     if (e.key === 'Tab') {
       e.preventDefault();
     }

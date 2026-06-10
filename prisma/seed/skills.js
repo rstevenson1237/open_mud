@@ -6,11 +6,13 @@ import { PrismaClient } from '@prisma/client';
 
 const db = new PrismaClient();
 
+// Minor-level skills (specific stat, e.g. 'phy_for') → rollContribution 15–20
+// Major-level skills (broad major, e.g. 'Physical') → rollContribution 10–14
 const STARTER_SKILLS = [
   {
     name: 'brawling',
     stat: 'phy_for',
-    rollContribution: 10,
+    rollContribution: 16,
     autoSucceedSimple: false,
     prerequisites: [],
     unlocksActions: ['attack_target'],
@@ -20,7 +22,7 @@ const STARTER_SKILLS = [
   {
     name: 'athletics',
     stat: 'phy_pre',
-    rollContribution: 8,
+    rollContribution: 15,
     autoSucceedSimple: false,
     prerequisites: [],
     unlocksActions: ['action_run'],
@@ -30,7 +32,7 @@ const STARTER_SKILLS = [
   {
     name: 'endurance',
     stat: 'phy_res',
-    rollContribution: 10,
+    rollContribution: 15,
     autoSucceedSimple: false,
     prerequisites: [],
     unlocksActions: [],
@@ -40,7 +42,7 @@ const STARTER_SKILLS = [
   {
     name: 'investigation',
     stat: 'men_pre',
-    rollContribution: 8,
+    rollContribution: 15,
     autoSucceedSimple: false,
     prerequisites: [],
     unlocksActions: [],
@@ -50,7 +52,7 @@ const STARTER_SKILLS = [
   {
     name: 'resolve',
     stat: 'men_res',
-    rollContribution: 10,
+    rollContribution: 15,
     autoSucceedSimple: false,
     prerequisites: [],
     unlocksActions: [],
@@ -61,11 +63,33 @@ const STARTER_SKILLS = [
     // Example spell skill — lives on instance.state.skills, not avatar
     name: 'flame_bolt',
     stat: 'men_for',
-    rollContribution: 15,
+    rollContribution: 18,
     autoSucceedSimple: false,
     prerequisites: [],
     unlocksActions: ['attack_target'],
     attachedToObject: true,
+    regionScoped: false,
+  },
+  {
+    // Broad physical skill — applies to any phy_* roll, lower bonus
+    name: 'physical_aptitude',
+    stat: 'Physical',
+    rollContribution: 12,
+    autoSucceedSimple: false,
+    prerequisites: [],
+    unlocksActions: [],
+    attachedToObject: false,
+    regionScoped: false,
+  },
+  {
+    // Broad social skill — applies to any soc_* roll, lower bonus
+    name: 'social_grace',
+    stat: 'Social',
+    rollContribution: 11,
+    autoSucceedSimple: false,
+    prerequisites: [],
+    unlocksActions: [],
+    attachedToObject: false,
     regionScoped: false,
   },
 ];

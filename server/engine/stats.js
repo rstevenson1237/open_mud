@@ -8,7 +8,14 @@ export const STAT_KEYS = [
   'soc_for', 'soc_pre', 'soc_res',
 ];
 
-const MAJORS = {
+export const MAJORS = {
+  Physical: ['phy_for', 'phy_pre', 'phy_res'],
+  Mental:   ['men_for', 'men_pre', 'men_res'],
+  Social:   ['soc_for', 'soc_pre', 'soc_res'],
+};
+
+// Maps major names to their minor stat keys for skill applicability checks
+export const MAJOR_TO_STATS = {
   Physical: ['phy_for', 'phy_pre', 'phy_res'],
   Mental:   ['men_for', 'men_pre', 'men_res'],
   Social:   ['soc_for', 'soc_pre', 'soc_res'],
@@ -27,51 +34,57 @@ export function defaultStats() {
 }
 
 /**
- * Apply a point-buy allocation to a stats object.
- * Allocation: { phy_for: N, phy_pre: N, ... } — points above baseline, each ≥ 0.
- * Validates:
- *   1. Total allocation across all stats ≤ majorBudget.
- *   2. Per-major allocation (Physical/Mental/Social) ≤ minorBudgetPerMajor.
- *   3. Each final stat value in [statMin, statMax].
+ * Apply final stat values to a stats object.
+ * finalValues: { phy_for: N, ... } — the desired final values for each stat.
+ * currentStats: existing stat object (used to carry forward metadata only).
+ *
+ * Validation rules:
+ *   1. Each stat ∈ [statMin, statMax]  (default [10, 40])
+ *   2. Sum of max(0, stat − 20) across all 9 stats ≤ majorBudget (budget counts only above-baseline)
+ *   3. Within each major group, sum of three stat values ≥ 60 (enforces zero-sum internal shift balance)
+ *
+ * The within-major free rebalancing mechanic: players can reduce one minor stat and increase
+ * another in the same major 1:1 at no budget cost, up to ±10 per stat. Rule 3 enforces
+ * that below-baseline reductions are covered by above-baseline peers in the same major.
+ *
  * Returns { ok: true, stats } on success or { ok: false, reason } on failure.
  */
-export function applyPointBuy(stats, allocation, {
+export function applyPointBuy(currentStats, finalValues, {
   majorBudget = 30,
-  minorBudgetPerMajor = 20,
-  statMin = 0,
+  statMin = 10,
   statMax = 40,
 } = {}) {
-  // Validate and normalize allocation — only known stat keys, values non-negative integers
-  const alloc = {};
+  // Rule 1: validate each stat is an integer in [statMin, statMax]
   for (const key of STAT_KEYS) {
-    const v = allocation[key] ?? 0;
-    if (!Number.isInteger(v) || v < 0) {
-      return { ok: false, reason: `Allocation for ${key} must be a non-negative integer.` };
+    const v = finalValues[key];
+    if (!Number.isInteger(v)) {
+      return { ok: false, reason: `${key} must be an integer.` };
     }
-    alloc[key] = v;
+    if (v < statMin) return { ok: false, reason: `${key} (${v}) is below the minimum of ${statMin}.` };
+    if (v > statMax) return { ok: false, reason: `${key} (${v}) exceeds the maximum of ${statMax}.` };
   }
 
-  // Check per-major budget
+  // Rule 2: total points above baseline ≤ majorBudget
+  const aboveBaseline = STAT_KEYS.reduce((sum, k) => sum + Math.max(0, finalValues[k] - STAT_BASELINE), 0);
+  if (aboveBaseline > majorBudget) {
+    return { ok: false, reason: `Total points above baseline (${aboveBaseline}) exceeds budget of ${majorBudget}.` };
+  }
+
+  // Rule 3: within each major, the sum of the three stats must be ≥ 60 (3 × baseline)
   for (const [majorName, keys] of Object.entries(MAJORS)) {
-    const majorTotal = keys.reduce((sum, k) => sum + alloc[k], 0);
-    if (majorTotal > minorBudgetPerMajor) {
-      return { ok: false, reason: `${majorName} allocation (${majorTotal}) exceeds minor budget per major (${minorBudgetPerMajor}).` };
+    const majorSum = keys.reduce((sum, k) => sum + finalValues[k], 0);
+    if (majorSum < STAT_BASELINE * keys.length) {
+      return {
+        ok: false,
+        reason: `${majorName} stats (${keys.map(k => finalValues[k]).join('+')}=${majorSum}) cannot net below baseline — free shifts within a major must balance out.`,
+      };
     }
   }
 
-  // Check grand total budget
-  const grandTotal = STAT_KEYS.reduce((sum, k) => sum + alloc[k], 0);
-  if (grandTotal > majorBudget) {
-    return { ok: false, reason: `Total allocation (${grandTotal}) exceeds major budget (${majorBudget}).` };
-  }
-
-  // Build new stats and check per-stat bounds
+  // Build final stat object, carrying forward any existing metadata
   const newStats = {};
   for (const key of STAT_KEYS) {
-    const newValue = (stats[key]?.value ?? STAT_BASELINE) + alloc[key];
-    if (newValue < statMin) return { ok: false, reason: `${key} would fall below statMin (${statMin}).` };
-    if (newValue > statMax) return { ok: false, reason: `${key} would exceed statMax (${statMax}).` };
-    newStats[key] = { value: newValue, metadata: stats[key]?.metadata ?? {} };
+    newStats[key] = { value: finalValues[key], metadata: currentStats[key]?.metadata ?? {} };
   }
 
   return { ok: true, stats: newStats };
@@ -97,25 +110,36 @@ export function statContribution(value) {
  */
 export async function getRollTarget(entity, statKey, skillId = null, conditionTargetStat = null) {
   const statValue = entity.stats?.[statKey]?.value ?? STAT_BASELINE;
-  const skillContrib = await getSkillRollContribution(entity, skillId);
+  const skillContrib = await getSkillRollContribution(entity, skillId, statKey);
   const condMod = getStatModifier(entity, conditionTargetStat ?? statKey);
   return Math.min(statContribution(statValue) + skillContrib + condMod, 70);
 }
 
 /**
- * Return the rollContribution of a skill for an entity.
- * 0 if skillId is null, entity doesn't have the skill, or SkillDefinition isn't seeded yet.
+ * Return the rollContribution of a skill for an entity, given the stat key being rolled.
+ * Handles both minor-level skills (stat = 'phy_for') and major-level skills (stat = 'Physical').
+ * 0 if skillId is null, entity doesn't have the skill, skill doesn't apply to statKey, or table not seeded.
  */
-export async function getSkillRollContribution(entity, skillId) {
+export async function getSkillRollContribution(entity, skillId, statKey = null) {
   if (skillId == null) return 0;
-  // Check entity has the skill acquired
   const skillEntry = entity.skills?.[String(skillId)];
   if (!skillEntry?.acquired) return 0;
   try {
     const def = await db.skillDefinition.findUnique({ where: { id: skillId } });
-    return def?.rollContribution ?? 0;
+    if (!def) return 0;
+    // Check skill applicability against the rolling stat
+    if (statKey && def.stat) {
+      const majorKeys = MAJOR_TO_STATS[def.stat];
+      if (majorKeys) {
+        // Major-level skill: applies to any minor in that major
+        if (!majorKeys.includes(statKey)) return 0;
+      } else {
+        // Minor-level skill: must exactly match the rolling stat
+        if (def.stat !== statKey) return 0;
+      }
+    }
+    return def.rollContribution ?? 0;
   } catch {
-    // SkillDefinition table not yet migrated (pre-TASK 2)
     return 0;
   }
 }
@@ -123,16 +147,14 @@ export async function getSkillRollContribution(entity, skillId) {
 /**
  * Read the active budgets for point-buy from world config,
  * optionally overridden by a region's creation config.
- * Used by character creation (TASK 5).
  */
 export async function getPointBuyConfig(regionConfig = null) {
   const world = await db.worldState.findUnique({ where: { id: 1 } });
   const wCfg = world?.config ?? {};
   const rCreate = regionConfig?.creation ?? {};
   return {
-    majorBudget:       rCreate.majorBudget       ?? wCfg.majorBudget       ?? 30,
-    minorBudgetPerMajor: rCreate.minorBudgetPerMajor ?? wCfg.minorBudgetPerMajor ?? 20,
-    statMin:           rCreate.statMin           ?? 0,
-    statMax:           rCreate.statMax           ?? 40,
+    majorBudget: rCreate.majorBudget ?? wCfg.majorBudget ?? 30,
+    statMin:     rCreate.statMin     ?? wCfg.statMin     ?? 10,
+    statMax:     rCreate.statMax     ?? wCfg.statMax     ?? 40,
   };
 }

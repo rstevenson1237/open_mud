@@ -1,3 +1,10 @@
+// Stat key list kept local to avoid pulling in the DB layer just for a constant
+const _STAT_KEYS = [
+  'phy_for', 'phy_pre', 'phy_res',
+  'men_for', 'men_pre', 'men_res',
+  'soc_for', 'soc_pre', 'soc_res',
+];
+
 // Format tag → HTML map. Whitelist only. No other tags rendered.
 const TAG_MAP = {
   'b':   ['<strong>', '</strong>'],
@@ -41,19 +48,27 @@ export function renderOutput(text) {
  * Build a STATUS payload for the client status bar.
  */
 export function buildStatusPayload(avatar) {
+  const stats = {};
+  for (const k of _STAT_KEYS) {
+    stats[k] = avatar.stats?.[k]?.value ?? 20;
+  }
   return {
     type: 'STATUS',
     data: {
       name: avatar.name,
-      wounds: avatar.wounds,
-      stress: avatar.stress,
-      hunger: avatar.hunger,
-      rest: avatar.rest,
+      wounds:    avatar.wounds,
+      woundMax:  avatar.woundMax  ?? 3,
+      sanity:    avatar.sanity,
+      sanityMax: avatar.sanityMax ?? 3,
+      stress:    avatar.stress,
+      hunger:    avatar.hunger,
+      rest:      avatar.rest,
       conditions: (avatar.activeConditions ?? [])
         .filter(c => c.visibilityEffect !== 'none')
         .map(c => c.name),
       locationName: avatar.locationName ?? '',
-      zoneType: avatar.zoneType ?? 'SAFE',
+      zoneType:    avatar.zoneType ?? 'SAFE',
+      stats,
     },
   };
 }
