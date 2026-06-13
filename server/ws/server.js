@@ -7,6 +7,7 @@ import { routeInput } from '../interface/router.js';
 import { renderOutput, buildStatusPayload } from '../interface/output.js';
 import { initSessionPrng, clearSessionPrng } from '../engine/resolver.js';
 import { parseDSL } from '../engine/dsl/parser.js';
+import { emitPanel, setPendingPanelHandler } from '../interface/panels.js';
 import { logger } from '../log/logger.js';
 import { config } from '../config.js';
 
@@ -77,6 +78,13 @@ export function startWsServer(port) {
         }
 
         const result = await routeInput(msg.input, session);
+        if (result.panel) {
+          await setPendingPanelHandler(sessionToken, result.panel.handlerKey);
+          const panelId = await emitPanel(ws, sessionToken, result.panel.descriptor);
+          if (!panelId) {
+            send(ws, { type: 'OUTPUT', html: renderOutput('[color=yellow]Please complete or cancel the current panel first.[/]') });
+          }
+        }
         if (result.output) send(ws, { type: 'OUTPUT', html: result.output });
         if (result.error)  send(ws, { type: 'OUTPUT', html: result.error });
         if (result.status) send(ws, result.status);

@@ -65,7 +65,7 @@ export async function routeInput(raw, session) {
     const ctx = buildContext(session, resolved);
     try {
       const result = await cmd.handler(ctx);
-      return { output: result.output, status: result.status };
+      return { output: result.output, status: result.status, panel: result.panel };
     } catch (e) {
       logger.error('ROUTER', 'Command error', { cmd: cmd.verb, error: e.message });
       return { error: renderOutput('[color=red]Command failed.[/]') };
