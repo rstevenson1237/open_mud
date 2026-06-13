@@ -1,5 +1,6 @@
 // Economy commands: coins/balance (readout), buy/sell (phase 3), vendor (builder), trade (stub).
 import { registerCommand } from './commands.js';
+import { registerPanelRoute } from './panels.js';
 import { renderOutput } from './output.js';
 import { db } from '../db/postgres.js';
 import { redis } from '../db/redis.js';
@@ -12,6 +13,8 @@ export function register() {
   registerCommand('sell',    handleSell,    { minUserType: 'CHARACTER' });
   registerCommand('vendor',  handleVendor,  { minUserType: 'POWER_USER' });
   registerCommand('trade',   handleTrade,   { minUserType: 'CHARACTER' });
+
+  registerPanelRoute('vendor_config', handleVendorConfigSubmit);
 }
 
 // ─── COINS / BALANCE (readout — inline) ───────────────────────────────────────
@@ -133,9 +136,41 @@ async function handleVendor(ctx) {
   const vendorState = inst.state?.vendor ?? { stock: [], buyback: false, buybackRate: 1 };
 
   if (!sub) {
-    // Display current vendor config
-    const lines = (vendorState.stock ?? []).map(s => `  $${s.templateId} — ${s.price} coins (qty: ${s.quantity ?? '∞'})`).join('\n') || '  (empty)';
-    return { output: renderOutput(`[b]Vendor $${instId}:[/]\nBuyback: ${vendorState.buyback ? 'on' : 'off'} (rate ${vendorState.buybackRate ?? 1}x)\nStock:\n${lines}`) };
+    // Store vendor target in session for submit handler
+    const sessionRaw = await redis.get(`session:${ctx.sessionToken}`);
+    if (sessionRaw) {
+      const session = JSON.parse(sessionRaw);
+      session.pendingVendorTarget = { regionId: ctx.regionId, instId };
+      await redis.set(`session:${ctx.sessionToken}`, JSON.stringify(session));
+    }
+
+    return {
+      panel: {
+        handlerKey: 'vendor_config',
+        descriptor: {
+          title: `Vendor $${instId} Configuration`,
+          fields: [
+            { key: 'buyback',     type: 'checkbox', label: 'Enable Buyback', default: vendorState.buyback ?? false },
+            {
+              key: 'buybackRate', type: 'range', label: 'Buyback Rate',
+              min: 0.1, max: 2.0, step: 0.1, default: vendorState.buybackRate ?? 1.0,
+              displayFormat: '{value}x',
+            },
+            {
+              key: 'stock',
+              type: 'keyvalue-list',
+              label: 'Stock',
+              columns: [
+                { key: 'templateId', label: 'Template $ID', type: 'number', min: 1 },
+                { key: 'price',      label: 'Price (coins)', type: 'number', min: 0 },
+                { key: 'quantity',   label: 'Qty (−1 = ∞)',  type: 'number', default: -1 },
+              ],
+              default: vendorState.stock ?? [],
+            },
+          ],
+        },
+      },
+    };
   }
 
   if (sub === 'add') {
@@ -181,6 +216,36 @@ async function handleVendor(ctx) {
   }
 
   return { output: renderOutput('[b]Usage:[/] vendor $instId [add|remove|buyback|rate] ...') };
+}
+
+async function handleVendorConfigSubmit(ctx, payload) {
+  const sessionRaw = await redis.get(`session:${ctx.sessionToken}`);
+  if (!sessionRaw) return { output: renderOutput('[color=red]Session not found.[/]') };
+  const session = JSON.parse(sessionRaw);
+  const target = session.pendingVendorTarget;
+  delete session.pendingVendorTarget;
+  await redis.set(`session:${ctx.sessionToken}`, JSON.stringify(session));
+
+  if (!target) return { output: renderOutput('[color=red]No vendor target in session.[/]') };
+
+  const inst = await db.objectInstance.findFirst({ where: { regionId: target.regionId, id: target.instId } });
+  if (!inst) return { output: renderOutput(`[color=red]Instance $${target.instId} not found.[/]`) };
+
+  const { buyback, buybackRate, stock } = payload;
+  const newVendorState = {
+    ...(inst.state?.vendor ?? {}),
+    buyback: buyback ?? false,
+    buybackRate: buybackRate ?? 1.0,
+    stock: (stock ?? []).map(row => ({
+      templateId: parseInt(row.templateId) || 0,
+      price:      parseInt(row.price)      || 0,
+      quantity:   parseInt(row.quantity)   ?? -1,
+    })),
+  };
+
+  await _saveVendorState(inst, newVendorState);
+  logger.audit('ECONOMY', 'vendor_config_update', { userId: ctx.userId, instId: target.instId });
+  return { output: renderOutput(`[color=green]Vendor $${target.instId} configuration saved.[/]`) };
 }
 
 async function _saveVendorState(inst, vendorState) {
