@@ -1,6 +1,7 @@
 // Builder commands: world-structure editing, scripting, skill grants, region config.
 // All require POWER_USER or above; checkPermission enforces region scope.
 import { registerCommand } from './commands.js';
+import { registerPanelRoute } from './panels.js';
 import { renderOutput } from './output.js';
 import { db } from '../db/postgres.js';
 import { redis } from '../db/redis.js';
@@ -27,6 +28,13 @@ export function register() {
   registerCommand('grant',        handleGrant,       { minUserType: 'POWER_USER' });
   registerCommand('revoke',       handleRevoke,      { minUserType: 'POWER_USER' });
   registerCommand('config',       handleConfig,      { minUserType: 'POWER_USER' });
+
+  registerPanelRoute('script_edit',      handleScriptEditSubmit);
+  registerPanelRoute('create_location',  handleCreateLocationSubmit);
+  registerPanelRoute('create_template',  handleCreateTemplateSubmit);
+  registerPanelRoute('create_exit',      handleCreateExitSubmit);
+  registerPanelRoute('describe_target',  handleDescribeTargetSubmit);
+  registerPanelRoute('region_config',    handleRegionConfigSubmit);
 }
 
 // ─── Permission helper ────────────────────────────────────────────────────────
@@ -122,7 +130,30 @@ async function handleCreate(ctx) {
 }
 
 async function handleCreateLocation(ctx, name) {
-  if (!name) return { output: renderOutput('[b]Usage:[/] create location {name}') };
+  if (!name) {
+    return {
+      panel: {
+        handlerKey: 'create_location',
+        descriptor: {
+          title: 'Create Location',
+          fields: [
+            { key: 'name',        type: 'text',     label: 'Location Name', minLength: 1, maxLength: 60 },
+            {
+              key: 'zoneType',    type: 'select',   label: 'Zone Type',
+              options: [
+                { value: 'SAFE',      label: 'Safe'      },
+                { value: 'OPEN',      label: 'Open'      },
+                { value: 'DANGEROUS', label: 'Dangerous' },
+              ],
+              default: 'SAFE',
+            },
+            { key: 'description', type: 'textarea', label: 'Description', rows: 4, required: false, placeholder: 'You stand in...' },
+          ],
+        },
+      },
+    };
+  }
+
   const p = await perm(ctx, 'write', { type: 'region', id: String(ctx.regionId) });
   if (!p.allowed) return { output: renderOutput('[color=red]Permission denied.[/]') };
 
@@ -135,10 +166,58 @@ async function handleCreateLocation(ctx, name) {
   return { output: renderOutput(`[color=green]Location created:[/] [b]${esc(name)}[/] (id ${newId} in region ${ctx.regionId})`) };
 }
 
+async function handleCreateLocationSubmit(ctx, payload) {
+  if (!ctx.regionId) return { output: renderOutput('[color=red]No active region.[/]') };
+  const { name, zoneType, description } = payload;
+  if (!name?.trim()) return { output: renderOutput('[color=red]Name is required.[/]') };
+
+  const p = await perm(ctx, 'write', { type: 'region', id: String(ctx.regionId) });
+  if (!p.allowed) return { output: renderOutput('[color=red]Permission denied.[/]') };
+
+  const newId = await nextLocationId(ctx.regionId);
+  await db.location.create({
+    data: {
+      regionId: ctx.regionId, id: newId,
+      name: name.trim(),
+      zoneType: zoneType ?? 'SAFE',
+      description: description ?? '',
+      metadata: {},
+    },
+  });
+
+  logger.audit('BUILDER', 'create_location', { userId: ctx.userId, regionId: ctx.regionId, locationId: newId, name });
+  return { output: renderOutput(`[color=green]Location created:[/] [b]${esc(name)}[/] (id ${newId} in region ${ctx.regionId})`) };
+}
+
+const VALID_DIRS = ['north','south','east','west','northeast','northwest','southeast','southwest','up','down','in','out'];
+
 async function handleCreateExit(ctx, parts) {
   // create exit {dir} to #{locId}
   const toIdx = parts.indexOf('to');
-  if (toIdx < 1) return { output: renderOutput('[b]Usage:[/] create exit {dir} to #{locId}') };
+  if (toIdx < 1) {
+    // Open panel
+    return {
+      panel: {
+        handlerKey: 'create_exit',
+        descriptor: {
+          title: 'Create Exit',
+          fields: [
+            {
+              key: 'direction', type: 'select', label: 'Direction',
+              options: VALID_DIRS.map(d => ({ value: d, label: d })),
+            },
+            { key: 'toLocationId', type: 'number', label: 'Destination Location #ID', min: 0 },
+            {
+              key: 'toRegionId', type: 'number', label: 'Destination Region ID (blank = current)',
+              required: false, default: ctx.regionId,
+            },
+            { key: 'hidden', type: 'checkbox', label: 'Hidden', default: false },
+          ],
+        },
+      },
+    };
+  }
+
   const dir = parts.slice(0, toIdx).join(' ').toLowerCase();
   const toArg = parts.slice(toIdx + 1).join(' ');
   const toLoc = await resolveLocation(toArg, ctx.regionId);
@@ -161,6 +240,34 @@ async function handleCreateExit(ctx, parts) {
   return { output: renderOutput(`[color=green]Exit created:[/] '${esc(dir)}' → location ${toLoc.id} (exit id ${newId})`) };
 }
 
+async function handleCreateExitSubmit(ctx, payload) {
+  if (!ctx.regionId) return { output: renderOutput('[color=red]No active region.[/]') };
+  const { direction, toLocationId, toRegionId, hidden } = payload;
+  if (!direction) return { output: renderOutput('[color=red]Direction is required.[/]') };
+  const destRegionId = toRegionId ?? ctx.regionId;
+  const destLocId = parseInt(toLocationId);
+  if (isNaN(destLocId)) return { output: renderOutput('[color=red]Destination location ID is required.[/]') };
+
+  const toLoc = await db.location.findUnique({ where: { regionId_id: { regionId: destRegionId, id: destLocId } } });
+  if (!toLoc) return { output: renderOutput(`[color=red]Location ${destRegionId}:${destLocId} not found.[/]`) };
+
+  const p = await perm(ctx, 'write', { type: 'region', id: String(ctx.regionId) });
+  if (!p.allowed) return { output: renderOutput('[color=red]Permission denied.[/]') };
+
+  const newId = await nextExitId(ctx.regionId);
+  await db.exit.create({
+    data: {
+      id: newId, regionId: ctx.regionId,
+      fromLocationId: ctx.locationId, direction,
+      toRegionId: destRegionId, toLocationId: destLocId,
+      isState: hidden ? { hidden: true } : {},
+    },
+  });
+
+  logger.audit('BUILDER', 'create_exit', { userId: ctx.userId, regionId: ctx.regionId, exitId: newId, direction, destLocId });
+  return { output: renderOutput(`[color=green]Exit created:[/] '${esc(direction)}' → location ${destLocId} (exit id ${newId})`) };
+}
+
 async function handleCreateRegion(ctx, name) {
   if (ctx.userType !== 'ROOT' && ctx.userType !== 'ADMIN') {
     return { output: renderOutput('[color=red]Only ADMIN or ROOT may create regions.[/]') };
@@ -175,21 +282,69 @@ async function handleCreateRegion(ctx, name) {
   return { output: renderOutput(`[color=green]Region created:[/] [b]${esc(name)}[/] (id ${region.id})`) };
 }
 
-async function handleCreateTemplate(ctx, parts) {
-  // create template {name} {type}
-  if (parts.length < 2) return { output: renderOutput('[b]Usage:[/] create template {name} {type}') };
-  const type = parts[parts.length - 1].toUpperCase();
-  const name = parts.slice(0, -1).join(' ');
+const TEMPLATE_TYPES = ['GENERIC','CONTAINER','WEAPON','ARMOR','COIN','VENDOR','MOB','EXTENDED'];
 
-  const validTypes = ['ITEM', 'MOB', 'ARMOR', 'WEAPON', 'FOOD', 'DRINK', 'COIN', 'CONTAINER', 'EXTENDED'];
-  if (!validTypes.includes(type)) return { output: renderOutput(`[color=red]Invalid type. Choose: ${validTypes.join(', ')}[/]`) };
+async function handleCreateTemplate(ctx, parts) {
+  // create template {name} {type} — inline bypass when both provided
+  if (parts.length >= 2) {
+    const type = parts[parts.length - 1].toUpperCase();
+    const name = parts.slice(0, -1).join(' ');
+    const validTypes = ['ITEM', 'MOB', 'ARMOR', 'WEAPON', 'FOOD', 'DRINK', 'COIN', 'CONTAINER', 'EXTENDED', ...TEMPLATE_TYPES];
+    if (validTypes.includes(type) && name) {
+      const p = await perm(ctx, 'write', { type: 'region', id: String(ctx.regionId) });
+      if (!p.allowed) return { output: renderOutput('[color=red]Permission denied.[/]') };
+      const newId = await nextTemplateId();
+      await db.objectTemplate.create({
+        data: { id: newId, name, type, regionId: ctx.regionId, baseSchema: {}, aliases: [], metadata: {} },
+      });
+      logger.audit('BUILDER', 'create_template', { userId: ctx.userId, templateId: newId, name, type });
+      return { output: renderOutput(`[color=green]Template created:[/] [b]${esc(name)}[/] type=${type} (id $${newId})`) };
+    }
+  }
+
+  // Open panel
+  return {
+    panel: {
+      handlerKey: 'create_template',
+      descriptor: {
+        title: 'Create Object Template',
+        fields: [
+          { key: 'name',        type: 'text',     label: 'Template Name', minLength: 1, maxLength: 60 },
+          {
+            key: 'type',        type: 'select',   label: 'Object Type',
+            options: TEMPLATE_TYPES.map(t => ({ value: t, label: t.charAt(0) + t.slice(1).toLowerCase() })),
+            default: 'GENERIC',
+          },
+          { key: 'description', type: 'textarea', label: 'Description', rows: 3, required: false },
+          { key: 'weight',      type: 'number',   label: 'Weight (units)', min: 0, default: 1 },
+        ],
+      },
+    },
+  };
+}
+
+async function handleCreateTemplateSubmit(ctx, payload) {
+  if (!ctx.regionId) return { output: renderOutput('[color=red]No active region.[/]') };
+  const { name, type, description, weight } = payload;
+  if (!name?.trim()) return { output: renderOutput('[color=red]Name is required.[/]') };
 
   const p = await perm(ctx, 'write', { type: 'region', id: String(ctx.regionId) });
   if (!p.allowed) return { output: renderOutput('[color=red]Permission denied.[/]') };
 
   const newId = await nextTemplateId();
   await db.objectTemplate.create({
-    data: { id: newId, name, type, regionId: ctx.regionId, baseSchema: {}, aliases: [], metadata: {} },
+    data: {
+      id: newId,
+      name: name.trim(),
+      type: type ?? 'GENERIC',
+      regionId: ctx.regionId,
+      baseSchema: {
+        description: description ?? '',
+        weight: weight ?? 1,
+      },
+      aliases: [],
+      metadata: {},
+    },
   });
 
   logger.audit('BUILDER', 'create_template', { userId: ctx.userId, templateId: newId, name, type });
@@ -234,12 +389,12 @@ async function handleDescribe(ctx) {
   const parts = ctx.raw.trim().split(/\s+/);
   const targetArg = parts[1];
   const text = parts.slice(2).join(' ');
-  if (!targetArg || !text) return { output: renderOutput('[b]Usage:[/] describe {#loc|here} {text}') };
+  if (!targetArg) return { output: renderOutput('[b]Usage:[/] describe {#loc|here} [text]') };
 
   const rId = ctx.regionId;
   let loc;
   if (targetArg === 'here') {
-    loc = { regionId: rId, id: ctx.locationId };
+    loc = await db.location.findUnique({ where: { regionId_id: { regionId: rId, id: ctx.locationId } } });
   } else {
     loc = await resolveLocation(targetArg, rId);
   }
@@ -248,13 +403,66 @@ async function handleDescribe(ctx) {
   const p = await perm(ctx, 'write', { type: 'region', id: String(rId) });
   if (!p.allowed) return { output: renderOutput('[color=red]Permission denied.[/]') };
 
-  await db.location.update({
-    where: { regionId_id: { regionId: rId, id: loc.id } },
-    data: { description: text },
-  });
+  // Inline bypass: text provided on command line
+  if (text) {
+    await db.location.update({
+      where: { regionId_id: { regionId: rId, id: loc.id } },
+      data: { description: text },
+    });
+    logger.audit('BUILDER', 'describe_location', { userId: ctx.userId, regionId: rId, locationId: loc.id });
+    return { output: renderOutput(`[color=green]Description updated for location ${loc.id}.[/]`) };
+  }
 
-  logger.audit('BUILDER', 'describe_location', { userId: ctx.userId, regionId: rId, locationId: loc.id });
-  return { output: renderOutput(`[color=green]Description updated for location ${loc.id}.[/]`) };
+  // Store target reference in session for submit handler
+  const sessionRaw = await redis.get(`session:${ctx.sessionToken}`);
+  if (sessionRaw) {
+    const session = JSON.parse(sessionRaw);
+    session.pendingDescribeTarget = { type: 'LOCATION', regionId: rId, id: loc.id };
+    await redis.set(`session:${ctx.sessionToken}`, JSON.stringify(session));
+  }
+
+  return {
+    panel: {
+      handlerKey: 'describe_target',
+      descriptor: {
+        title: `Describe — ${esc(loc.name)}`,
+        fields: [
+          {
+            key: 'description',
+            type: 'textarea',
+            label: 'Description',
+            rows: 6,
+            default: loc.description ?? '',
+            placeholder: 'You stand in a dimly lit room...',
+          },
+        ],
+      },
+    },
+  };
+}
+
+async function handleDescribeTargetSubmit(ctx, payload) {
+  const { description } = payload;
+
+  const sessionRaw = await redis.get(`session:${ctx.sessionToken}`);
+  if (!sessionRaw) return { output: renderOutput('[color=red]Session not found.[/]') };
+  const session = JSON.parse(sessionRaw);
+  const target = session.pendingDescribeTarget;
+  delete session.pendingDescribeTarget;
+  await redis.set(`session:${ctx.sessionToken}`, JSON.stringify(session));
+
+  if (!target) return { output: renderOutput('[color=red]No describe target in session.[/]') };
+
+  if (target.type === 'LOCATION') {
+    await db.location.update({
+      where: { regionId_id: { regionId: target.regionId, id: target.id } },
+      data: { description: description ?? '' },
+    });
+    logger.audit('BUILDER', 'describe_location', { userId: ctx.userId, regionId: target.regionId, locationId: target.id });
+    return { output: renderOutput(`[color=green]Description updated for location ${target.id}.[/]`) };
+  }
+
+  return { output: renderOutput('[color=red]Unknown describe target type.[/]') };
 }
 
 async function handleRename(ctx) {
@@ -460,7 +668,7 @@ async function _appendDSLLine(rId, loc, dslLine) {
   return { output: renderOutput(`[color=green]Rule appended to location ${loc.id} script (id ${script.id}).[/]`) };
 }
 
-// ─── EDIT (multiline — activates session editBuffer) ─────────────────────────
+// ─── EDIT (panel-based script editor) ────────────────────────────────────────
 
 async function handleEdit(ctx) {
   // edit {#loc|here}
@@ -476,25 +684,104 @@ async function handleEdit(ctx) {
   const p = await perm(ctx, 'write', { type: 'region', id: String(rId) });
   if (!p.allowed) return { output: renderOutput('[color=red]Permission denied.[/]') };
 
-  // Load current script content to show in editor
   const existing = await db.script.findFirst({
     where: { attachedToType: 'LOCATION', attachedToId: `${rId}:${loc.id}` },
   });
   const existingLines = existing ? _bodyToLines(existing.body) : [];
 
-  // Set session editBuffer — server.js CMD handler handles line accumulation
+  // Store edit target in session for submit handler
   const sessionRaw = await redis.get(`session:${ctx.sessionToken}`);
   if (sessionRaw) {
     const session = JSON.parse(sessionRaw);
-    session.editBuffer = existingLines;
-    session.editTarget = { type: 'LOCATION', attachId: `${rId}:${loc.id}`, regionId: rId, locationId: loc.id };
+    session.pendingEditTarget = { type: 'LOCATION', attachId: `${rId}:${loc.id}`, regionId: rId, locationId: loc.id };
     await redis.set(`session:${ctx.sessionToken}`, JSON.stringify(session));
   }
 
-  const preview = existingLines.length
-    ? `\n[dim]Current script:[/]\n${existingLines.map((l, i) => `[dim]${i + 1}:[/] ${l}`).join('\n')}`
-    : '';
-  return { output: renderOutput(`[color=green]Editing script for location ${loc.id}.[/] Enter DSL lines; type [b].[/] alone to save, [b]!cancel[/] to discard.${preview}`) };
+  return {
+    panel: {
+      handlerKey: 'script_edit',
+      descriptor: {
+        title: `Edit Script — Location ${loc.id}`,
+        description: 'Enter DSL rules. Each line: trigger [if condition] do action(args).',
+        fields: [
+          {
+            key: 'body',
+            type: 'textarea',
+            label: 'Script Body',
+            rows: 20,
+            default: existingLines.join('\n'),
+            placeholder: 'on_enter do say("Welcome.")\non_use if has_item($key) do unlock(#door)',
+            required: false,
+          },
+        ],
+      },
+    },
+  };
+}
+
+async function handleScriptEditSubmit(ctx, payload) {
+  const { body } = payload;
+
+  const sessionRaw = await redis.get(`session:${ctx.sessionToken}`);
+  if (!sessionRaw) return { output: renderOutput('[color=red]Session not found.[/]') };
+  const session = JSON.parse(sessionRaw);
+  const editTarget = session.pendingEditTarget;
+  delete session.pendingEditTarget;
+  await redis.set(`session:${ctx.sessionToken}`, JSON.stringify(session));
+
+  if (!editTarget) return { output: renderOutput('[color=red]No edit target in session.[/]') };
+
+  if (!body?.trim()) {
+    // Empty body — clear the script
+    const script = await db.script.findFirst({
+      where: { attachedToType: editTarget.type, attachedToId: editTarget.attachId },
+    });
+    if (script) {
+      if (editTarget.type === 'LOCATION') {
+        await db.location.update({
+          where: { regionId_id: { regionId: editTarget.regionId, id: editTarget.locationId } },
+          data: { scriptId: null },
+        });
+      }
+      await db.script.delete({ where: { id: script.id } });
+    }
+    return { output: renderOutput('[dim]Empty script — cleared.[/]') };
+  }
+
+  const parsed = parseDSL(body);
+  if (!parsed.ok) {
+    const errorMsg = parsed.errors.join('\n');
+    return {
+      panel: {
+        handlerKey: 'script_edit',
+        descriptor: {
+          title: editTarget.type === 'LOCATION' ? `Edit Script — Location ${editTarget.locationId}` : 'Edit Script',
+          description: 'Enter DSL rules. Each line: trigger [if condition] do action(args).',
+          error: parsed.errors[0],
+          fields: [
+            {
+              key: 'body',
+              type: 'textarea',
+              label: 'Script Body',
+              rows: 20,
+              default: body,
+              placeholder: 'on_enter do say("Welcome.")',
+              required: false,
+            },
+          ],
+        },
+      },
+    };
+  }
+
+  // Build a minimal session-like object for finalizeEdit
+  const editSession = {
+    editBuffer: body.split('\n'),
+    editTarget,
+    sessionToken: ctx.sessionToken,
+  };
+  const html = await finalizeEdit(editSession);
+  return { output: html };
 }
 
 function _bodyToLines(body) {
@@ -648,20 +935,106 @@ async function handleConfig(ctx) {
   }
   if (!region) return { output: renderOutput('[color=red]Region not found.[/]') };
 
-  if (!key) {
-    // Display
-    return { output: renderOutput(`[b]Region ${region.id} config:[/]\n${JSON.stringify(region.config, null, 2)}`) };
+  // Inline single-key set: config #region key value
+  if (key && value !== '') {
+    const p = await perm(ctx, 'write', { type: 'region', id: String(region.id) });
+    if (!p.allowed) return { output: renderOutput('[color=red]Permission denied.[/]') };
+
+    const parsed = value === 'true' ? true : value === 'false' ? false
+      : (isNaN(Number(value)) ? value : Number(value));
+    const newConfig = { ...(region.config ?? {}), [key]: parsed };
+    await db.region.update({ where: { id: region.id }, data: { config: newConfig } });
+    return { output: renderOutput(`[color=green]Region ${region.id} config.${key} = ${JSON.stringify(parsed)}[/]`) };
   }
 
-  const p = await perm(ctx, 'write', { type: 'region', id: String(region.id) });
+  // No key/value — open config panel
+  const cfg = region.config ?? {};
+  const toggles = cfg.toggles ?? {};
+  const currency = cfg.currency ?? {};
+
+  // Store region id in session for submit handler
+  const sessionRaw = await redis.get(`session:${ctx.sessionToken}`);
+  if (sessionRaw) {
+    const session = JSON.parse(sessionRaw);
+    session.pendingConfigRegionId = region.id;
+    await redis.set(`session:${ctx.sessionToken}`, JSON.stringify(session));
+  }
+
+  return {
+    panel: {
+      handlerKey: 'region_config',
+      descriptor: {
+        title: `Region ${region.id} Configuration`,
+        description: 'Changes are applied immediately. Toggles take effect next tick.',
+        fields: [
+          { key: 'woundMax',    type: 'number',  label: 'Wound Max',    min: 1, max: 20, default: cfg.woundMax ?? 3 },
+          { key: 'sanityMax',   type: 'number',  label: 'Sanity Max',   min: 1, max: 20, default: cfg.sanityMax ?? 3 },
+          {
+            key: 'sanityBreakBehavior', type: 'select', label: 'Sanity Break Behavior',
+            options: [
+              { value: 'condition_only', label: 'Condition Only' },
+              { value: 'confusion',      label: 'Confusion'      },
+              { value: 'flee',           label: 'Flee'           },
+              { value: 'panic',          label: 'Panic'          },
+              { value: 'comatose',       label: 'Comatose'       },
+              { value: 'mental_break',   label: 'Mental Break'   },
+            ],
+            default: cfg.sanityBreakBehavior ?? 'condition_only',
+          },
+          { key: 'dayNightCycleTicks', type: 'number', label: 'Day/Night Cycle (ticks)', min: 0, default: cfg.dayNightCycleTicks ?? 0 },
+          { key: 'toggle_combat',   type: 'checkbox', label: 'Combat Enabled',   default: toggles.combat  ?? true  },
+          { key: 'toggle_pvp',      type: 'checkbox', label: 'PvP Enabled',      default: toggles.pvp     ?? false },
+          { key: 'toggle_hunger',   type: 'checkbox', label: 'Hunger Enabled',   default: toggles.hunger  ?? true  },
+          { key: 'toggle_rest',     type: 'checkbox', label: 'Rest Enabled',     default: toggles.rest    ?? true  },
+          { key: 'toggle_crafting', type: 'checkbox', label: 'Crafting Enabled', default: toggles.crafting ?? false },
+          { key: 'coinWeightDivisor', type: 'number', label: 'Coin Weight Divisor', min: 1, default: currency.coinWeightDivisor ?? 10 },
+        ],
+      },
+    },
+  };
+}
+
+async function handleRegionConfigSubmit(ctx, payload) {
+  const sessionRaw = await redis.get(`session:${ctx.sessionToken}`);
+  if (!sessionRaw) return { output: renderOutput('[color=red]Session not found.[/]') };
+  const session = JSON.parse(sessionRaw);
+  const regionId = session.pendingConfigRegionId;
+  delete session.pendingConfigRegionId;
+  await redis.set(`session:${ctx.sessionToken}`, JSON.stringify(session));
+
+  if (!regionId) return { output: renderOutput('[color=red]No config target in session.[/]') };
+
+  const region = await db.region.findUnique({ where: { id: regionId } });
+  if (!region) return { output: renderOutput('[color=red]Region not found.[/]') };
+
+  const p = await perm(ctx, 'write', { type: 'region', id: String(regionId) });
   if (!p.allowed) return { output: renderOutput('[color=red]Permission denied.[/]') };
 
-  const parsed = value === 'true' ? true : value === 'false' ? false
-    : (isNaN(Number(value)) ? value : Number(value));
-  const newConfig = { ...(region.config ?? {}), [key]: parsed };
-  await db.region.update({ where: { id: region.id }, data: { config: newConfig } });
+  const existing = region.config ?? {};
+  const toggles = { ...(existing.toggles ?? {}) };
+  const currency = { ...(existing.currency ?? {}) };
 
-  return { output: renderOutput(`[color=green]Region ${region.id} config.${key} = ${JSON.stringify(parsed)}[/]`) };
+  // Merge toggle_ fields into toggles sub-object
+  for (const [k, v] of Object.entries(payload)) {
+    if (k.startsWith('toggle_')) {
+      toggles[k.slice(7)] = v;
+    }
+  }
+  if (payload.coinWeightDivisor != null) currency.coinWeightDivisor = payload.coinWeightDivisor;
+
+  const newConfig = {
+    ...existing,
+    toggles,
+    currency,
+    woundMax:             payload.woundMax             ?? existing.woundMax,
+    sanityMax:            payload.sanityMax            ?? existing.sanityMax,
+    sanityBreakBehavior:  payload.sanityBreakBehavior  ?? existing.sanityBreakBehavior,
+    dayNightCycleTicks:   payload.dayNightCycleTicks   ?? existing.dayNightCycleTicks,
+  };
+
+  await db.region.update({ where: { id: regionId }, data: { config: newConfig } });
+  logger.audit('BUILDER', 'region_config_update', { userId: ctx.userId, regionId });
+  return { output: renderOutput(`[color=green]Region ${regionId} configuration updated.[/]`) };
 }
 
 // ─── Shared finalize-edit logic (called from server.js editBuffer handler) ────

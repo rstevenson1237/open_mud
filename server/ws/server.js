@@ -7,6 +7,7 @@ import { routeInput } from '../interface/router.js';
 import { renderOutput, buildStatusPayload } from '../interface/output.js';
 import { initSessionPrng, clearSessionPrng } from '../engine/resolver.js';
 import { parseDSL } from '../engine/dsl/parser.js';
+import { emitPanel, setPendingPanelHandler } from '../interface/panels.js';
 import { logger } from '../log/logger.js';
 import { config } from '../config.js';
 
@@ -53,30 +54,14 @@ export function startWsServer(port) {
         const session = await loadSession(sessionToken);
         if (!session) { send(ws, { type: 'ERROR', message: 'Session expired.' }); return; }
 
-        // editBuffer mode: accumulate lines for multiline script editor
-        if (session.editBuffer !== undefined) {
-          const line = (msg.input ?? '').trim();
-          if (line === '!cancel') {
-            delete session.editBuffer;
-            delete session.editTarget;
-            await redis.set(`session:${sessionToken}`, JSON.stringify(session));
-            send(ws, { type: 'OUTPUT', html: renderOutput('[dim]Edit cancelled.[/]') });
-          } else if (line === '.') {
-            const { finalizeEdit } = await import('../interface/cmd_builder.js');
-            const html = await finalizeEdit(session);
-            delete session.editBuffer;
-            delete session.editTarget;
-            await redis.set(`session:${sessionToken}`, JSON.stringify(session));
-            send(ws, { type: 'OUTPUT', html });
-          } else {
-            session.editBuffer.push(line);
-            await redis.set(`session:${sessionToken}`, JSON.stringify(session));
-            send(ws, { type: 'OUTPUT', html: renderOutput(`[dim]${session.editBuffer.length}:[/] ${line}`) });
-          }
-          return;
-        }
-
         const result = await routeInput(msg.input, session);
+        if (result.panel) {
+          await setPendingPanelHandler(sessionToken, result.panel.handlerKey);
+          const panelId = await emitPanel(ws, sessionToken, result.panel.descriptor);
+          if (!panelId) {
+            send(ws, { type: 'OUTPUT', html: renderOutput('[color=yellow]Please complete or cancel the current panel first.[/]') });
+          }
+        }
         if (result.output) send(ws, { type: 'OUTPUT', html: result.output });
         if (result.error)  send(ws, { type: 'OUTPUT', html: result.error });
         if (result.status) send(ws, result.status);

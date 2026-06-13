@@ -1,18 +1,17 @@
-// Character creation command: /new-avatar {name}
-// Implements a two-step interactive wizard stored in session Redis:
-//   Step 1 — /new-avatar {name}: validate name, prompt for stat allocation
-//   Step 2 — /new-avatar {9 numbers}: apply point-buy, create avatar, activate
-// The wizard state is stored in session Redis so the same handler reads it on next invocation.
+// Character creation command: /new-avatar {name} [stat values...]
+// Decision fork:
+//   All 10 args inline  → execute immediately, no panel
+//   Name only           → validate name inline, open stat panel with name locked
+//   No args             → open panel with empty name field
 
 import { registerCommand } from './commands.js';
+import { registerPanelRoute } from './panels.js';
 import { renderOutput } from './output.js';
 import { db } from '../db/postgres.js';
 import { redis } from '../db/redis.js';
 import { markDirty } from '../db/sync.js';
 import { defaultStats, applyPointBuy, getPointBuyConfig, STAT_KEYS } from '../engine/stats.js';
 import { logger } from '../log/logger.js';
-// DSL vocab extensions (on_first_visit, has_visited) added in TASK 13 when the
-// builder commands that expose parser.js VALID sets are implemented.
 
 const NAME_MIN = 2;
 const NAME_MAX = 30;
@@ -22,79 +21,123 @@ export function register() {
     aliases: [],
     minUserType: 'CHARACTER',
   });
+
+  registerPanelRoute('new_avatar_stats', handleAvatarPanelSubmit);
 }
 
 async function handleCreation(ctx) {
-  const sessionRaw = await redis.get(`session:${ctx.sessionToken}`);
-  if (!sessionRaw) return { output: renderOutput('[color=red]Session not found.[/]') };
-  const session = JSON.parse(sessionRaw);
+  const args = ctx.raw.trim().split(/\s+/).slice(1);
 
-  const args = ctx.raw.trim().split(/\s+/).slice(1); // strip command verb
-
-  // If wizard is active and we receive 9 numbers, process stat allocation (step 2)
-  if (session.creationWizard?.step === 'stats' && args.length === 9 && args.every(a => /^-?\d+$/.test(a))) {
-    return await _applyStats(ctx, session, args.map(Number));
+  // Inline bypass: name + 9 stat values provided
+  if (args.length >= 10) {
+    const name = args[0];
+    const nums = args.slice(1, 10).map(Number);
+    if (nums.every(n => !isNaN(n))) {
+      const nameErr = await _checkName(name);
+      if (nameErr) return { output: renderOutput(nameErr) };
+      return _applyStats(ctx, name, nums);
+    }
   }
 
-  // Step 1: name provided
+  // Name only: validate then open panel with name locked
   if (args.length >= 1) {
-    return await _validateName(ctx, session, args[0]);
+    const name = args[0];
+    const nameErr = await _checkName(name);
+    if (nameErr) return { output: renderOutput(nameErr) };
+
+    const pbCfg = await getPointBuyConfig(null);
+    return _openCreationPanel(name, pbCfg, true);
   }
 
-  // No args and no wizard — show help
-  if (session.creationWizard?.step === 'stats') {
-    return { output: renderOutput(_statPrompt(session.creationWizard.name)) };
-  }
-  return { output: renderOutput('[b]Usage:[/] /new-avatar {name}') };
+  // No args: open panel with empty name field
+  const pbCfg = await getPointBuyConfig(null);
+  return _openCreationPanel(null, pbCfg, false);
 }
 
-async function _validateName(ctx, session, name) {
-  // Validate printable, length
-  if (name.length < NAME_MIN || name.length > NAME_MAX) {
-    return { output: renderOutput(`[color=red]Name must be ${NAME_MIN}–${NAME_MAX} characters.[/]`) };
+function _openCreationPanel(name, pbCfg, nameLocked) {
+  return {
+    panel: {
+      handlerKey: 'new_avatar_stats',
+      descriptor: {
+        title: 'Create Avatar',
+        description: 'Choose your name and allocate your starting stats.',
+        fields: [
+          {
+            key: 'name',
+            type: 'text',
+            label: 'Avatar Name',
+            minLength: NAME_MIN,
+            maxLength: NAME_MAX,
+            pattern: '^[\\x20-\\x7E]+$',
+            default: name ?? '',
+            locked: nameLocked,
+            helpText: 'Printable ASCII, 2–30 characters. Must be unique.',
+          },
+          {
+            key: 'stats',
+            type: 'stat-allocator',
+            label: 'Stat Allocation',
+            majorBudget: pbCfg.majorBudget,
+            statMin: pbCfg.statMin,
+            statMax: pbCfg.statMax,
+            helpText: `Points above 20 per stat cost from your budget of ${pbCfg.majorBudget}.`,
+          },
+        ],
+      },
+    },
+  };
+}
+
+async function handleAvatarPanelSubmit(ctx, payload) {
+  const { name, stats } = payload;
+
+  // Re-validate name (it may not have been pre-validated if entered in panel)
+  const nameErr = await _checkName(name);
+  if (nameErr) {
+    const pbCfg = await getPointBuyConfig(null);
+    return {
+      panel: {
+        handlerKey: 'new_avatar_stats',
+        descriptor: {
+          ..._openCreationPanel(name, pbCfg, false).panel.descriptor,
+          error: nameErr.replace(/\[.*?\]/g, ''),
+        },
+      },
+    };
+  }
+
+  // Map stat object to ordered array
+  const nums = STAT_KEYS.map(k => stats?.[k] ?? 20);
+  return _applyStats(ctx, name, nums);
+}
+
+async function _checkName(name) {
+  if (!name || name.length < NAME_MIN || name.length > NAME_MAX) {
+    return `[color=red]Name must be ${NAME_MIN}–${NAME_MAX} characters.[/]`;
   }
   if (!/^[\x20-\x7E]+$/.test(name)) {
-    return { output: renderOutput('[color=red]Name must contain only printable ASCII characters.[/]') };
+    return '[color=red]Name must contain only printable ASCII characters.[/]';
   }
-
-  // Check uniqueness
   const existing = await db.avatar.findFirst({ where: { name: { equals: name, mode: 'insensitive' } } });
   if (existing) {
-    return { output: renderOutput(`[color=red]The name '${_esc(name)}' is already taken.[/]`) };
+    return `[color=red]The name '${_esc(name)}' is already taken.[/]`;
   }
-
-  // Get point-buy config (no region yet — use world defaults)
-  const pbCfg = await getPointBuyConfig(null);
-
-  // Store wizard state in session Redis
-  session.creationWizard = {
-    step: 'stats',
-    name,
-    pointBuyConfig: pbCfg,
-  };
-  await redis.set(`session:${ctx.sessionToken}`, JSON.stringify(session));
-
-  return { output: renderOutput(_statPrompt(name, pbCfg)) };
+  return null;
 }
 
-async function _applyStats(ctx, session, nums) {
-  const { name, pointBuyConfig: pbCfg } = session.creationWizard;
-
-  // Map 9 numbers to stat keys as final values
+async function _applyStats(ctx, name, nums) {
+  const pbCfg = await getPointBuyConfig(null);
   const finalValues = Object.fromEntries(STAT_KEYS.map((k, i) => [k, nums[i]]));
-
   const base = defaultStats();
   const result = applyPointBuy(base, finalValues, pbCfg);
   if (!result.ok) {
-    return { output: renderOutput(`[color=red]${_esc(result.reason)}[/]\n${_statPrompt(name, pbCfg)}`) };
+    return { output: renderOutput(`[color=red]${_esc(result.reason)}[/]`) };
   }
 
-  // Create avatar in DB
   const world = await db.worldState.findUnique({ where: { id: 1 } });
   const voidRegionId = world?.config?.voidRegionId ?? null;
   const voidLocationId = world?.config?.voidLocationId ?? null;
 
-  // Generate a unique avatar ID (max existing + 1, min 1)
   const maxRow = await db.avatar.findFirst({ orderBy: { id: 'desc' } });
   const newId = (maxRow?.id ?? 0) + 1;
 
@@ -116,7 +159,6 @@ async function _applyStats(ctx, session, nums) {
     },
   });
 
-  // Push avatar to Redis hot-state
   const hotState = {
     id: avatar.id,
     userId: avatar.userId,
@@ -145,11 +187,14 @@ async function _applyStats(ctx, session, nums) {
   await markDirty('avatar', avatar.id);
 
   // Activate: update session to reference this avatar
-  delete session.creationWizard;
-  session.avatarId = avatar.id;
-  session.regionId = avatar.regionId;
-  session.locationId = avatar.locationId;
-  await redis.set(`session:${ctx.sessionToken}`, JSON.stringify(session));
+  const sessionRaw = await redis.get(`session:${ctx.sessionToken}`);
+  if (sessionRaw) {
+    const session = JSON.parse(sessionRaw);
+    session.avatarId = avatar.id;
+    session.regionId = avatar.regionId;
+    session.locationId = avatar.locationId;
+    await redis.set(`session:${ctx.sessionToken}`, JSON.stringify(session));
+  }
 
   logger.audit('CREATION', 'avatar_created', { avatarId: avatar.id, userId: ctx.userId, name });
 
@@ -158,25 +203,9 @@ async function _applyStats(ctx, session, nums) {
     output: renderOutput(
       `[b]Avatar '${_esc(name)}' created![/] Welcome to the world.\n` +
       `Stats: ${statSummary}\n` +
-      (voidRegionId == null ? 'You float in The Void, awaiting your first step.' : `You find yourself in the starting area.`)
+      (voidRegionId == null ? 'You float in The Void, awaiting your first step.' : 'You find yourself in the starting area.')
     ),
   };
-}
-
-function _statPrompt(name, pbCfg = {}) {
-  const budget = pbCfg.majorBudget ?? 30;
-  const statMin = pbCfg.statMin ?? 10;
-  const statMax = pbCfg.statMax ?? 40;
-  return (
-    `[b]Creating avatar:[/] ${_esc(name)}\n` +
-    `Enter your 9 final stat values. Rules:\n` +
-    `  • Each stat: ${statMin}–${statMax}  •  Points above 20 (total): max ${budget}\n` +
-    `  • Within each major (PHY/MEN/SOC): free zero-sum shifts up to ±10 per stat\n` +
-    `    (reduce one minor to boost another in the same group at no cost)\n` +
-    `Order: phy_for phy_pre phy_res  men_for men_pre men_res  soc_for soc_pre soc_res\n` +
-    `Example: /new-avatar 30 20 20  25 20 15  20 20 20\n` +
-    `(PHY: +10 buy; MEN: +5 buy, −5 free shift; SOC: unchanged)`
-  );
 }
 
 function _esc(text) {

@@ -3,6 +3,7 @@
 // root  {set-user|set-world}      [args...]  — requires ROOT (direct access)
 
 import { registerCommand } from './commands.js';
+import { registerPanelRoute } from './panels.js';
 import { renderOutput } from './output.js';
 import { db } from '../db/postgres.js';
 import { redis } from '../db/redis.js';
@@ -18,6 +19,8 @@ const TYPE_RANK = { ROOT: 5, ADMIN: 4, POWER_USER: 3, CHARACTER: 2, GHOST: 1 };
 export function register() {
   registerCommand('admin', handleAdmin, { minUserType: 'ADMIN', tickCost: 0 });
   registerCommand('root',  handleRoot,  { minUserType: 'ADMIN', tickCost: 0 }); // in-handler ROOT check
+
+  registerPanelRoute('admin_avatar_edit', handleAdminAvatarEditSubmit);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -63,7 +66,8 @@ async function handleAdmin(ctx) {
 
   return ok(
     '[b]admin user[/] list | info @user | set-type @user {type} | lock @user | unlock @user\n' +
-    '[b]admin avatar[/] list [@user] | info @avatar | set-stat @av {stat} {n} |\n' +
+    '[b]admin avatar[/] list [@user] | info @avatar | edit @avatar |\n' +
+    '               set-stat @av {stat} {n} |\n' +
     '               set-wounds @av {n} | set-sanity @av {n} | set-stress @av {n} |\n' +
     '               set-hunger @av {n} | set-rest @av {n} |\n' +
     '               teleport @av {regionId}:{locationId} |\n' +
@@ -164,6 +168,7 @@ async function _adminAvatar(ctx, verb, args) {
   switch (verb) {
     case 'list':         return _avatarList(ctx, args[0]);
     case 'info':         return _avatarInfo(ctx, args[0]);
+    case 'edit':         return _avatarEdit(ctx, args[0]);
     case 'set-stat':     return _avatarSetStat(ctx, args[0], args[1], args[2]);
     case 'set-wounds':   return _avatarSetTrack(ctx, args[0], 'wounds',  args[1]);
     case 'set-sanity':   return _avatarSetTrack(ctx, args[0], 'sanity',  args[1]);
@@ -176,12 +181,108 @@ async function _adminAvatar(ctx, verb, args) {
     case 'reset-stats':  return _avatarResetStats(ctx, args[0]);
     default:
       return ok(
-        '[b]admin avatar[/] list [@user] | info @av | set-stat @av {key} {n} |\n' +
+        '[b]admin avatar[/] list [@user] | info @av | edit @av |\n' +
+        '  set-stat @av {key} {n} |\n' +
         '  set-wounds|set-sanity|set-stress|set-hunger|set-rest @av {n} |\n' +
         '  teleport @av {regionId}:{locationId} |\n' +
         '  grant-skill @av {skillId} | revoke-skill @av {skillId} | reset-stats @av'
       );
   }
+}
+
+async function _avatarEdit(ctx, nameArg) {
+  const avatar = await findAvatar(nameArg);
+  if (!avatar) return err(`Avatar not found: ${nameArg ?? '(none)'}`);
+
+  const hot = await getHotAvatar(avatar.id);
+  const av = hot ?? avatar;
+  const stats = av.stats ?? {};
+
+  // Store target in session for submit handler
+  const sessionRaw = await redis.get(`session:${ctx.sessionToken}`);
+  if (sessionRaw) {
+    const session = JSON.parse(sessionRaw);
+    session.pendingAdminAvatarEdit = avatar.id;
+    await redis.set(`session:${ctx.sessionToken}`, JSON.stringify(session));
+  }
+
+  return {
+    panel: {
+      handlerKey: 'admin_avatar_edit',
+      descriptor: {
+        title: `Edit Avatar — ${esc(avatar.name)}`,
+        description: `userId: ${avatar.userId}  |  avatarId: ${avatar.id}`,
+        fields: [
+          { key: 'phy_for', type: 'number', label: 'PHY FOR', min: 0, max: 99, default: stats.phy_for?.value ?? 20 },
+          { key: 'phy_pre', type: 'number', label: 'PHY PRE', min: 0, max: 99, default: stats.phy_pre?.value ?? 20 },
+          { key: 'phy_res', type: 'number', label: 'PHY RES', min: 0, max: 99, default: stats.phy_res?.value ?? 20 },
+          { key: 'men_for', type: 'number', label: 'MEN FOR', min: 0, max: 99, default: stats.men_for?.value ?? 20 },
+          { key: 'men_pre', type: 'number', label: 'MEN PRE', min: 0, max: 99, default: stats.men_pre?.value ?? 20 },
+          { key: 'men_res', type: 'number', label: 'MEN RES', min: 0, max: 99, default: stats.men_res?.value ?? 20 },
+          { key: 'soc_for', type: 'number', label: 'SOC FOR', min: 0, max: 99, default: stats.soc_for?.value ?? 20 },
+          { key: 'soc_pre', type: 'number', label: 'SOC PRE', min: 0, max: 99, default: stats.soc_pre?.value ?? 20 },
+          { key: 'soc_res', type: 'number', label: 'SOC RES', min: 0, max: 99, default: stats.soc_res?.value ?? 20 },
+          { key: 'wounds', type: 'number', label: 'Wounds', min: 0, max: 20, default: av.wounds ?? 0 },
+          { key: 'sanity', type: 'number', label: 'Sanity', min: 0, max: 20, default: av.sanity ?? 0 },
+          { key: 'stress', type: 'number', label: 'Stress', min: 0, max: 20, default: av.stress ?? 1 },
+          { key: 'hunger', type: 'number', label: 'Hunger', min: 0, max: 100, default: av.hunger ?? 0 },
+          { key: 'rest',   type: 'number', label: 'Rest',   min: 0, max: 100, default: av.rest   ?? 100 },
+        ],
+      },
+    },
+  };
+}
+
+async function handleAdminAvatarEditSubmit(ctx, payload) {
+  const sessionRaw = await redis.get(`session:${ctx.sessionToken}`);
+  if (!sessionRaw) return { output: renderOutput('[color=red]Session not found.[/]') };
+  const session = JSON.parse(sessionRaw);
+  const avatarId = session.pendingAdminAvatarEdit;
+  delete session.pendingAdminAvatarEdit;
+  await redis.set(`session:${ctx.sessionToken}`, JSON.stringify(session));
+
+  if (!avatarId) return { output: renderOutput('[color=red]No avatar edit target in session.[/]') };
+
+  const hot = await getHotAvatar(avatarId);
+  if (!hot) return { output: renderOutput('[color=red]Avatar not in hot-state.[/]') };
+
+  const changedFields = [];
+
+  // Apply stat changes
+  const newStats = { ...(hot.stats ?? {}) };
+  for (const key of STAT_KEYS) {
+    if (payload[key] != null) {
+      const newVal = parseInt(payload[key]);
+      if (!isNaN(newVal) && newVal !== (hot.stats?.[key]?.value ?? 20)) {
+        newStats[key] = { value: newVal, metadata: hot.stats?.[key]?.metadata ?? {} };
+        changedFields.push(`${key}=${newVal}`);
+      }
+    }
+  }
+  hot.stats = newStats;
+
+  // Apply survival track changes
+  for (const track of ['wounds', 'sanity', 'stress', 'hunger', 'rest']) {
+    if (payload[track] != null) {
+      const newVal = parseInt(payload[track]);
+      if (!isNaN(newVal) && newVal !== hot[track]) {
+        hot[track] = newVal;
+        changedFields.push(`${track}=${newVal}`);
+      }
+    }
+  }
+
+  await saveHotAvatar(avatarId, hot);
+
+  if (changedFields.length > 0) {
+    logger.audit('ADMIN', 'avatar_edit_panel', {
+      actorUserId: ctx.userId,
+      avatarId,
+      changes: changedFields.join(', '),
+    });
+  }
+
+  return { output: renderOutput(`[color=green]Avatar ${avatarId} updated: ${changedFields.join(', ') || '(no changes)'}[/]`) };
 }
 
 async function _avatarList(ctx, usernameArg) {

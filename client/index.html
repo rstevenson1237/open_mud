@@ -14,6 +14,20 @@
         <span id="prompt">&gt;</span>
         <input id="cmd" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Command input">
       </div>
+      <div id="panel-overlay" hidden>
+        <div id="panel-container">
+          <div id="panel-header">
+            <span id="panel-title"></span>
+          </div>
+          <div id="panel-description" hidden></div>
+          <div id="panel-error" hidden></div>
+          <div id="panel-body"></div>
+          <div id="panel-footer">
+            <button id="panel-cancel-btn" type="button">Cancel</button>
+            <button id="panel-confirm-btn" type="button">Confirm</button>
+          </div>
+        </div>
+      </div>
     </div>
     <div id="right-pane">
       <div id="status-panel">
