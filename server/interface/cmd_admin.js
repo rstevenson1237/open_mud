@@ -66,7 +66,8 @@ async function handleAdmin(ctx) {
 
   return ok(
     '[b]admin user[/] list | info @user | set-type @user {type} | lock @user | unlock @user\n' +
-    '[b]admin avatar[/] list [@user] | info @avatar | set-stat @av {stat} {n} |\n' +
+    '[b]admin avatar[/] list [@user] | info @avatar | edit @avatar |\n' +
+    '               set-stat @av {stat} {n} |\n' +
     '               set-wounds @av {n} | set-sanity @av {n} | set-stress @av {n} |\n' +
     '               set-hunger @av {n} | set-rest @av {n} |\n' +
     '               teleport @av {regionId}:{locationId} |\n' +
