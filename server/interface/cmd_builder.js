@@ -7,6 +7,7 @@ import { db } from '../db/postgres.js';
 import { redis } from '../db/redis.js';
 import { checkPermission } from '../engine/permissions.js';
 import { parseDSL } from '../engine/dsl/parser.js';
+import { handleBuildQuest, handleBuildRecipe } from './cmd_quest.js';
 import { logger } from '../log/logger.js';
 
 const BUILD_SUBS = {
@@ -24,6 +25,9 @@ const BUILD_SUBS = {
   grant:    handleGrant,
   revoke:   handleRevoke,
   config:   handleConfig,
+  // Phase 3 additions
+  quest:    handleBuildQuest,
+  recipe:   handleBuildRecipe,
 };
 
 const SCRIPT_SUBS = {

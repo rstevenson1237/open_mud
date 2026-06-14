@@ -1,10 +1,11 @@
 import { registerCommand } from './commands.js';
 import { renderOutput } from './output.js';
 
-const GROUP_ORDER = ['system', 'navigation', 'combat', 'communication', 'inventory', 'economy', 'character', 'world', 'admin', 'root'];
+const GROUP_ORDER = ['system', 'navigation', 'combat', 'communication', 'inventory', 'economy', 'crafting', 'quests', 'character', 'world', 'admin', 'root'];
 const GROUP_LABELS = {
   system: 'SYSTEM', navigation: 'NAVIGATION', combat: 'COMBAT',
   communication: 'COMMUNICATION', inventory: 'INVENTORY', economy: 'ECONOMY',
+  crafting: 'CRAFTING', quests: 'QUESTS',
   character: 'CHARACTER', world: 'WORLD', admin: 'ADMIN', root: 'ROOT',
 };
 
