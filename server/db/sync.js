@@ -10,7 +10,7 @@ const AVATAR_COLS = [
   'wounds', 'sanity', 'woundMax', 'sanityMax',
   'stress', 'hunger', 'rest',
   'carryCapacity', 'encumberedThreshold',
-  'activeConditions', 'aliases', 'visitedRegions',
+  'activeConditions', 'aliases', 'visitedRegions', 'quests',
   'isActive', 'disconnectedAt', 'metadata',
 ];
 
