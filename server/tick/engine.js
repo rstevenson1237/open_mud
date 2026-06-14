@@ -16,6 +16,7 @@ import { survivalTick } from '../engine/survival.js';
 import { combatHandler, conditionExpireHandler, horrorHandler } from '../engine/combat.js';
 import { emitOnTick, mobKillHandler } from '../engine/mobs.js';
 import { purchaseHandler, saleHandler } from '../engine/economy.js';
+import { questHook } from '../engine/quests.js';
 import { drainPhase, enqueueAction } from './queue.js';
 import { logger } from '../log/logger.js';
 
@@ -180,6 +181,9 @@ async function processTick() {
       } else {
         await runTrigger(ev.eventName, evContext, sendOutput, emit);
       }
+      // Quest hook: observes every Response event after primary dispatch.
+      // No-op stub until Task 6; never added to SYSTEM_HANDLERS.
+      await questHook(ev.eventName, evContext, tickCount, emit, sendOutput);
     }
 
     // Phase 5: Maintenance
