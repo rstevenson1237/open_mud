@@ -17,8 +17,8 @@ const ADMIN_MAX_SET_TYPE = 'POWER_USER'; // ADMINs cannot escalate beyond this
 const TYPE_RANK = { ROOT: 5, ADMIN: 4, POWER_USER: 3, CHARACTER: 2, GHOST: 1 };
 
 export function register() {
-  registerCommand('admin', handleAdmin, { minUserType: 'ADMIN', tickCost: 0 });
-  registerCommand('root',  handleRoot,  { minUserType: 'ADMIN', tickCost: 0 }); // in-handler ROOT check
+  registerCommand('admin', handleAdmin, { minUserType: 'ADMIN', tickCost: 0, group: 'admin', description: "Admin commands (type 'admin help')" });
+  registerCommand('root',  handleRoot,  { minUserType: 'ROOT',  tickCost: 0, group: 'root',  description: "Root access commands" });
 
   registerPanelRoute('admin_avatar_edit', handleAdminAvatarEditSubmit);
 }

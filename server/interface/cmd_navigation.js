@@ -18,23 +18,32 @@ export function register() {
   registerCommand('look', handleLook, {
     aliases: ['l'],
     minUserType: 'CHARACTER',
+    group: 'navigation',
+    description: 'Look at your surroundings',
   });
   registerCommand('exits', handleExits, {
     aliases: [],
     minUserType: 'CHARACTER',
+    group: 'navigation',
+    description: 'List visible exits',
   });
   registerCommand('go', handleGo, {
-    // Short aliases (n s e w …) + long direction words as aliases so typing them routes here
     aliases: [...Object.keys(DIR_ALIASES), ...LONG_DIRS],
     minUserType: 'CHARACTER',
+    group: 'navigation',
+    description: 'Move in a direction',
   });
   registerCommand('travel', handleTravel, {
     aliases: [],
     minUserType: 'CHARACTER',
+    group: 'navigation',
+    description: 'Travel through a portal',
   });
   registerCommand('teleport', handleTeleport, {
     aliases: ['tp'],
     minUserType: 'POWER_USER',
+    group: 'world',
+    description: 'Teleport to a location',
   });
 }
 

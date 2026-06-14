@@ -9,25 +9,75 @@ import { checkPermission } from '../engine/permissions.js';
 import { parseDSL } from '../engine/dsl/parser.js';
 import { logger } from '../log/logger.js';
 
+const BUILD_SUBS = {
+  create:   handleCreate,
+  describe: handleDescribe,
+  rename:   handleRename,
+  zone:     handleZone,
+  lock:     handleLock,
+  unlock:   handleUnlock,
+  hide:     handleHide,
+  show:     handleShow,
+  link:     handleLink,
+  place:    handlePlace,
+  set:      handleSet,
+  grant:    handleGrant,
+  revoke:   handleRevoke,
+  config:   handleConfig,
+};
+
+const SCRIPT_SUBS = {
+  add:   handleScript,
+  edit:  handleEdit,
+  view:  handleViewScript,
+  clear: handleClearScript,
+};
+
+function buildHelpText(subs) {
+  return Object.keys(subs).join(', ');
+}
+
+async function dispatchBuild(ctx) {
+  const parts = ctx.raw.trim().split(/\s+/);
+  const sub = parts[1]?.toLowerCase();
+  if (!sub || sub === 'help') {
+    return { output: renderOutput(`[b]build subcommands:[/] ${buildHelpText(BUILD_SUBS)}`) };
+  }
+  const handler = BUILD_SUBS[sub];
+  if (!handler) {
+    return { output: renderOutput(`[color=red]Unknown build subcommand: ${esc(sub)}[/] — type 'build help' for list`) };
+  }
+  // Re-frame raw so inner handlers see sub as parts[0]
+  const reframed = { ...ctx, raw: parts.slice(1).join(' ') };
+  return handler(reframed);
+}
+
+async function dispatchScript(ctx) {
+  const parts = ctx.raw.trim().split(/\s+/);
+  const sub = parts[1]?.toLowerCase();
+  if (!sub || sub === 'help') {
+    return { output: renderOutput(`[b]script subcommands:[/] ${buildHelpText(SCRIPT_SUBS)}\n  add {#loc|here} {dsl_line} · edit [#loc] · view [#loc] · clear [#loc]`) };
+  }
+  const handler = SCRIPT_SUBS[sub];
+  if (!handler) {
+    return { output: renderOutput(`[color=red]Unknown script subcommand: ${esc(sub)}[/] — type 'script help' for list`) };
+  }
+  const reframed = { ...ctx, raw: parts.slice(1).join(' ') };
+  return handler(reframed);
+}
+
 export function register() {
-  registerCommand('create',       handleCreate,      { minUserType: 'POWER_USER' });
-  registerCommand('describe',     handleDescribe,    { minUserType: 'POWER_USER' });
-  registerCommand('rename',       handleRename,      { minUserType: 'POWER_USER' });
-  registerCommand('zone',         handleZone,        { minUserType: 'POWER_USER' });
-  registerCommand('lock',         handleLock,        { minUserType: 'POWER_USER' });
-  registerCommand('unlock',       handleUnlock,      { minUserType: 'POWER_USER' });
-  registerCommand('hide',         handleHide,        { minUserType: 'POWER_USER' });
-  registerCommand('show',         handleShow,        { minUserType: 'POWER_USER' });
-  registerCommand('link',         handleLink,        { minUserType: 'POWER_USER' });
-  registerCommand('place',        handlePlace,       { minUserType: 'POWER_USER' });
-  registerCommand('set',          handleSet,         { minUserType: 'POWER_USER' });
-  registerCommand('script',       handleScript,      { minUserType: 'POWER_USER' });
-  registerCommand('edit',         handleEdit,        { minUserType: 'POWER_USER' });
-  registerCommand('view-script',  handleViewScript,  { minUserType: 'POWER_USER' });
-  registerCommand('clear-script', handleClearScript, { minUserType: 'POWER_USER' });
-  registerCommand('grant',        handleGrant,       { minUserType: 'POWER_USER' });
-  registerCommand('revoke',       handleRevoke,      { minUserType: 'POWER_USER' });
-  registerCommand('config',       handleConfig,      { minUserType: 'POWER_USER' });
+  registerCommand('build', dispatchBuild, {
+    minUserType: 'POWER_USER',
+    group: 'world',
+    description: 'World-building commands (type \'build help\')',
+  });
+
+  registerCommand('script', dispatchScript, {
+    minUserType: 'POWER_USER',
+    group: 'world',
+    description: 'Script management commands (type \'script help\')',
+  });
 
   registerPanelRoute('script_edit',      handleScriptEditSubmit);
   registerPanelRoute('create_location',  handleCreateLocationSubmit);

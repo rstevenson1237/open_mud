@@ -8,11 +8,11 @@ import { enqueueAction } from '../tick/queue.js';
 import { logger } from '../log/logger.js';
 
 export function register() {
-  registerCommand('coins',   handleCoins,   { aliases: ['balance'], minUserType: 'CHARACTER' });
-  registerCommand('buy',     handleBuy,     { minUserType: 'CHARACTER' });
-  registerCommand('sell',    handleSell,    { minUserType: 'CHARACTER' });
-  registerCommand('vendor',  handleVendor,  { minUserType: 'POWER_USER' });
-  registerCommand('trade',   handleTrade,   { minUserType: 'CHARACTER' });
+  registerCommand('coins',  handleCoins,  { aliases: ['balance'], minUserType: 'CHARACTER',  group: 'economy', description: 'Show your coin count' });
+  registerCommand('buy',    handleBuy,    {                       minUserType: 'CHARACTER',  group: 'economy', description: 'Buy from a vendor' });
+  registerCommand('sell',   handleSell,   {                       minUserType: 'CHARACTER',  group: 'economy', description: 'Sell to a vendor' });
+  registerCommand('vendor', handleVendor, {                       minUserType: 'POWER_USER', group: 'world',   description: 'Configure a vendor instance' });
+  registerCommand('trade',  handleTrade,  {                       minUserType: 'CHARACTER',  group: 'economy', description: 'Trade with another player' });
 
   registerPanelRoute('vendor_config', handleVendorConfigSubmit);
 }

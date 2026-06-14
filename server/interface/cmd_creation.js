@@ -20,6 +20,8 @@ export function register() {
   registerCommand('new-avatar', handleCreation, {
     aliases: [],
     minUserType: 'CHARACTER',
+    group: 'character',
+    description: 'Create a new avatar',
   });
 
   registerPanelRoute('new_avatar_stats', handleAvatarPanelSubmit);
