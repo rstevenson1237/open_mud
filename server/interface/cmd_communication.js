@@ -7,12 +7,12 @@ import { db } from '../db/postgres.js';
 import { redis } from '../db/redis.js';
 
 export function register() {
-  registerCommand('say',     handleSay,     { aliases: ['"', "'"], minUserType: 'CHARACTER' });
-  registerCommand('whisper', handleWhisper, { aliases: [],          minUserType: 'CHARACTER' });
-  registerCommand('shout',   handleShout,   { aliases: [],          minUserType: 'CHARACTER' });
-  registerCommand('alert',   handleAlert,   { aliases: [],          minUserType: 'POWER_USER' });
-  registerCommand('tell',    handleTell,    { aliases: [],          minUserType: 'CHARACTER' });
-  registerCommand('message', handleMessage, { aliases: ['mail'],    minUserType: 'CHARACTER' });
+  registerCommand('say',     handleSay,     { aliases: ['"', "'"], minUserType: 'CHARACTER',  group: 'communication', description: 'Speak to the room' });
+  registerCommand('whisper', handleWhisper, { aliases: [],          minUserType: 'CHARACTER',  group: 'communication', description: 'Whisper to someone here' });
+  registerCommand('shout',   handleShout,   { aliases: [],          minUserType: 'CHARACTER',  group: 'communication', description: 'Shout across the region' });
+  registerCommand('alert',   handleAlert,   { aliases: [],          minUserType: 'POWER_USER', group: 'world',         description: 'Broadcast a system alert' });
+  registerCommand('tell',    handleTell,    { aliases: [],          minUserType: 'CHARACTER',  group: 'communication', description: 'Send a direct message' });
+  registerCommand('message', handleMessage, { aliases: ['mail'],    minUserType: 'CHARACTER',  group: 'communication', description: 'Leave an inbox message' });
 }
 
 // ---------------------------------------------------------------------------

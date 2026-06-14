@@ -10,6 +10,7 @@ import { parseDSL } from '../engine/dsl/parser.js';
 import { emitPanel, setPendingPanelHandler } from '../interface/panels.js';
 import { logger } from '../log/logger.js';
 import { config } from '../config.js';
+import bcrypt from 'bcryptjs';
 
 const sessions = new Map(); // sessionToken → WebSocket
 
@@ -65,6 +66,7 @@ export function startWsServer(port) {
         if (result.output) send(ws, { type: 'OUTPUT', html: result.output });
         if (result.error)  send(ws, { type: 'OUTPUT', html: result.error });
         if (result.status) send(ws, result.status);
+        if (result.disconnect) { ws.close(); return; }
         return;
       }
     });
@@ -169,8 +171,9 @@ async function handleAuth(ws, msg) {
   const user = await db.user.findUnique({ where: { username } });
   if (!user) { send(ws, { type: 'AUTH_FAIL', message: 'Unknown user.' }); return null; }
 
-  // Phase 1: plain comparison placeholder — Phase 2 implements bcrypt
-  const valid = user.passwordHash === password;
+  const valid = user.passwordHash.startsWith('$2')
+    ? await bcrypt.compare(password, user.passwordHash)
+    : user.passwordHash === password;
   if (!valid) { send(ws, { type: 'AUTH_FAIL', message: 'Invalid credentials.' }); return null; }
 
   if (user.metadata?.locked) {

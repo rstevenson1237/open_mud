@@ -6,8 +6,18 @@ import { db } from '../db/postgres.js';
 import { redis } from '../db/redis.js';
 
 export function register() {
-  registerCommand('attack', handleAttack, { aliases: ['kill', 'hit'], minUserType: 'CHARACTER' });
-  registerCommand('run',    handleFlee,   { aliases: ['flee'],         minUserType: 'CHARACTER' });
+  registerCommand('attack', handleAttack, {
+    aliases: ['kill', 'hit'],
+    minUserType: 'CHARACTER',
+    group: 'combat',
+    description: 'Attack a target',
+  });
+  registerCommand('run', handleFlee, {
+    aliases: ['flee'],
+    minUserType: 'CHARACTER',
+    group: 'combat',
+    description: 'Flee from combat',
+  });
 }
 
 // ---------------------------------------------------------------------------

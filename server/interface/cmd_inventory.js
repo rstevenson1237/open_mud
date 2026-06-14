@@ -8,18 +8,18 @@ import { redis } from '../db/redis.js';
 import { checkPermission } from '../engine/permissions.js';
 
 export function register() {
-  registerCommand('get',       handleGet,        { aliases: ['take'], minUserType: 'CHARACTER' });
-  registerCommand('drop',      handleDrop,       { aliases: [],        minUserType: 'CHARACTER' });
-  registerCommand('give',      handleGive,       { aliases: [],        minUserType: 'CHARACTER' });
-  registerCommand('inventory', handleInventory,  { aliases: ['i'],     minUserType: 'CHARACTER' });
-  registerCommand('examine',   handleExamine,    { aliases: ['x'],     minUserType: 'CHARACTER' });
-  registerCommand('open',      handleOpen,       { aliases: [],        minUserType: 'CHARACTER' });
-  registerCommand('close',     handleClose,      { aliases: [],        minUserType: 'CHARACTER' });
-  registerCommand('put',       handlePut,        { aliases: [],        minUserType: 'CHARACTER' });
-  registerCommand('use',       handleUse,        { aliases: [],        minUserType: 'CHARACTER' });
-  registerCommand('wear',      handleWear,       { aliases: ['equip'], minUserType: 'CHARACTER' });
-  registerCommand('remove',    handleRemove,     { aliases: [],        minUserType: 'CHARACTER' });
-  registerCommand('trade',     handleTrade,      { aliases: [],        minUserType: 'CHARACTER' });
+  registerCommand('get',       handleGet,        { aliases: ['take'], minUserType: 'CHARACTER', group: 'inventory', description: 'Pick up an item' });
+  registerCommand('drop',      handleDrop,       { aliases: [],        minUserType: 'CHARACTER', group: 'inventory', description: 'Drop an item' });
+  registerCommand('give',      handleGive,       { aliases: [],        minUserType: 'CHARACTER', group: 'inventory', description: 'Give an item to someone' });
+  registerCommand('inventory', handleInventory,  { aliases: ['i'],     minUserType: 'CHARACTER', group: 'inventory', description: 'List carried items' });
+  registerCommand('examine',   handleExamine,    { aliases: ['x'],     minUserType: 'CHARACTER', group: 'inventory', description: 'Inspect an item' });
+  registerCommand('open',      handleOpen,       { aliases: [],        minUserType: 'CHARACTER', group: 'inventory', description: 'Open a container or door' });
+  registerCommand('close',     handleClose,      { aliases: [],        minUserType: 'CHARACTER', group: 'inventory', description: 'Close a container or door' });
+  registerCommand('put',       handlePut,        { aliases: [],        minUserType: 'CHARACTER', group: 'inventory', description: 'Put an item in a container' });
+  registerCommand('use',       handleUse,        { aliases: [],        minUserType: 'CHARACTER', group: 'inventory', description: 'Use an item' });
+  registerCommand('wear',      handleWear,       { aliases: ['equip'], minUserType: 'CHARACTER', group: 'inventory', description: 'Equip an item' });
+  registerCommand('remove',    handleRemove,     { aliases: [],        minUserType: 'CHARACTER', group: 'inventory', description: 'Unequip an item' });
+  registerCommand('trade',     handleTrade,      { aliases: [],        minUserType: 'CHARACTER', group: 'inventory', description: 'Trade with another player' });
 }
 
 // ---------------------------------------------------------------------------
