@@ -107,8 +107,14 @@ async function init() {
   await initDb();
   await initRedis();
 
+  // ─── REGISTRATION-SITE RULE ────────────────────────────────────────────────
+  // registerSystemHandler and registerMaintenanceTask belong HERE ONLY.
+  // This is the worker thread. index.js (main thread) registers command modules;
+  // it never calls registerSystemHandler or registerMaintenanceTask.
+  // Phase 3 additions: crafting, trade, questHook stub, tradeReaper, resourceRespawn.
+  // ───────────────────────────────────────────────────────────────────────────
+
   // Register Phase 2 maintenance tasks (executed in registration order each tick).
-  // Maintenance tasks run in the worker thread; register here, not in index.js.
   registerMaintenanceTask('conditions', tickConditions);
   registerMaintenanceTask('survival', survivalTick);
   registerMaintenanceTask('world-scripts', emitOnTick);

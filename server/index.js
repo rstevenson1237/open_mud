@@ -23,6 +23,12 @@ async function main() {
   await initRedis();
   registerBuiltins();
 
+  // ─── REGISTRATION-SITE RULE ────────────────────────────────────────────────
+  // This file (main thread) registers COMMAND MODULES only via register().
+  // registerSystemHandler and registerMaintenanceTask belong in server/tick/engine.js
+  // (the worker thread). Never call those functions here.
+  // ───────────────────────────────────────────────────────────────────────────
+
   // Phase 2 command registrations (order matters for alias resolution)
   registerCreation();
   registerNavigation();
