@@ -16,6 +16,7 @@ import { survivalTick } from '../engine/survival.js';
 import { combatHandler, conditionExpireHandler, horrorHandler } from '../engine/combat.js';
 import { emitOnTick, mobKillHandler } from '../engine/mobs.js';
 import { purchaseHandler, saleHandler } from '../engine/economy.js';
+import { tradeConfirmHandler, tradeReaper } from '../engine/trade.js';
 import { questHook } from '../engine/quests.js';
 import { drainPhase, enqueueAction } from './queue.js';
 import { logger } from '../log/logger.js';
@@ -132,6 +133,10 @@ async function init() {
   registerSystemHandler('on_kill',      mobKillHandler);
   registerSystemHandler('purchase',     purchaseHandler);
   registerSystemHandler('sale',         saleHandler);
+  registerSystemHandler('trade_confirm', tradeConfirmHandler);
+
+  // Phase 3 maintenance tasks
+  registerMaintenanceTask('tradeReaper', tradeReaper);
 
   const world = await db.worldState.findUnique({ where: { id: 1 } });
   tickCount = Number(world?.tickCount ?? 0n);
