@@ -2,6 +2,7 @@ import { redis } from '../db/redis.js';
 import { db } from '../db/postgres.js';
 import { hasCondition, getStatModifier, applyCondition, removeCondition } from './conditions.js';
 import { resolve } from './resolver.js';
+import { allocateInstanceId } from './idAllocator.js';
 import { logger } from '../log/logger.js';
 import { config } from '../config.js';
 
@@ -214,13 +215,48 @@ async function _execActions(actions, context, vars, budget, emitOutput, emitEven
         break;
       }
       case 'create_instance': {
-        const [templateId, locationId] = resolvedAction.args;
-        logger.info('STATE_MACHINE', 'create_instance_stub', { templateId, locationId });
+        // create_instance(templateId, locationId [, count])
+        const [tplArg, locArg, countArg] = resolvedAction.args;
+        const templateId = parseInt(tplArg);
+        const regionId = context.regionId ?? null;
+        const locationId = parseInt(locArg ?? context.locationId);
+        const count = countArg ? parseInt(countArg) : 1;
+        const tmpl = await db.objectTemplate.findUnique({ where: { id: templateId } });
+        if (!tmpl) {
+          logger.warn('STATE_MACHINE', 'create_instance: unknown template', { templateId });
+          break;
+        }
+        const newId = await allocateInstanceId(regionId);
+        await db.objectInstance.create({
+          data: {
+            id: newId, regionId, templateId,
+            ownerType: 'LOCATION', ownerId: String(locationId),
+            state: {}, isState: {},
+            count: tmpl.type === 'COIN' ? count : null,
+            metadata: {},
+          },
+        });
+        logger.info('STATE_MACHINE', 'create_instance', { templateId, regionId, locationId, newId });
         break;
       }
       case 'destroy_instance': {
-        const [instanceId] = resolvedAction.args;
-        logger.info('STATE_MACHINE', 'destroy_instance_stub', { instanceId });
+        // destroy_instance(instanceId [, regionId])
+        const [idArg, regionArg] = resolvedAction.args;
+        const instanceId = parseInt(idArg);
+        const regionId = regionArg != null ? parseInt(regionArg) : (context.regionId ?? null);
+        try {
+          if (regionId == null) {
+            const inst = await db.objectInstance.findFirst({ where: { regionId: null, id: instanceId } });
+            if (inst) await db.objectInstance.delete({ where: { pk: inst.pk } });
+          } else {
+            await db.objectInstance.delete({ where: { regionId_id: { regionId, id: instanceId } } });
+          }
+          await redis.del(`instance:${regionId ?? 'null'}:${instanceId}`);
+          await redis.sRem('dirty:instances', `${regionId ?? 'null'}:${instanceId}`);
+          logger.info('STATE_MACHINE', 'destroy_instance', { instanceId, regionId });
+        } catch (e) {
+          logger.warn('STATE_MACHINE', 'destroy_instance failed', { instanceId, regionId, error: e.message });
+        }
         break;
       }
       case 'call': {
