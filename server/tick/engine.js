@@ -16,6 +16,10 @@ import { survivalTick } from '../engine/survival.js';
 import { combatHandler, conditionExpireHandler, horrorHandler } from '../engine/combat.js';
 import { emitOnTick, mobKillHandler } from '../engine/mobs.js';
 import { purchaseHandler, saleHandler } from '../engine/economy.js';
+import { tradeConfirmHandler, tradeReaper } from '../engine/trade.js';
+import { craftingHandler } from '../engine/crafting.js';
+import { harvestHandler, resourceRespawn } from '../engine/resources.js';
+import { questHook } from '../engine/quests.js';
 import { drainPhase, enqueueAction } from './queue.js';
 import { logger } from '../log/logger.js';
 
@@ -107,8 +111,14 @@ async function init() {
   await initDb();
   await initRedis();
 
+  // ─── REGISTRATION-SITE RULE ────────────────────────────────────────────────
+  // registerSystemHandler and registerMaintenanceTask belong HERE ONLY.
+  // This is the worker thread. index.js (main thread) registers command modules;
+  // it never calls registerSystemHandler or registerMaintenanceTask.
+  // Phase 3 additions: crafting, trade, questHook stub, tradeReaper, resourceRespawn.
+  // ───────────────────────────────────────────────────────────────────────────
+
   // Register Phase 2 maintenance tasks (executed in registration order each tick).
-  // Maintenance tasks run in the worker thread; register here, not in index.js.
   registerMaintenanceTask('conditions', tickConditions);
   registerMaintenanceTask('survival', survivalTick);
   registerMaintenanceTask('world-scripts', emitOnTick);
@@ -125,6 +135,13 @@ async function init() {
   registerSystemHandler('on_kill',      mobKillHandler);
   registerSystemHandler('purchase',     purchaseHandler);
   registerSystemHandler('sale',         saleHandler);
+  registerSystemHandler('trade_confirm', tradeConfirmHandler);
+  registerSystemHandler('craft',        craftingHandler);
+  registerSystemHandler('harvest',      harvestHandler);
+
+  // Phase 3 maintenance tasks
+  registerMaintenanceTask('tradeReaper',    tradeReaper);
+  registerMaintenanceTask('resourceRespawn', resourceRespawn);
 
   const world = await db.worldState.findUnique({ where: { id: 1 } });
   tickCount = Number(world?.tickCount ?? 0n);
@@ -174,6 +191,9 @@ async function processTick() {
       } else {
         await runTrigger(ev.eventName, evContext, sendOutput, emit);
       }
+      // Quest hook: observes every Response event after primary dispatch.
+      // No-op stub until Task 6; never added to SYSTEM_HANDLERS.
+      await questHook(ev.eventName, evContext, tickCount, emit, sendOutput);
     }
 
     // Phase 5: Maintenance

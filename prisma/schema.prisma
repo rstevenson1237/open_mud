@@ -115,6 +115,7 @@ model Avatar {
   woundMax             Int      @default(3)
   sanityMax            Int      @default(3)
   visitedRegions       Json     @default("[]")
+  quests               Json     @default("{}")
   isActive             Boolean  @default(false)
   disconnectedAt       DateTime?
   createdAt            DateTime @default(now())
@@ -319,6 +320,36 @@ model Message {
 
   fromUser  User  @relation("FromUser", fields: [fromUserId], references: [id])
   toUser    User  @relation("ToUser",   fields: [toUserId],   references: [id])
+}
+
+// ─── RECIPES ─────────────────────────────────────────────────────────────────
+
+model Recipe {
+  id           Int      @id @default(autoincrement())
+  name         String   @unique
+  description  String   @default("")
+  inputs       Json     @default("[]")
+  outputs      Json     @default("[]")
+  skillId      Int?
+  stationType  String?
+  regionScoped Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  metadata     Json?
+}
+
+// ─── QUESTS ──────────────────────────────────────────────────────────────────
+
+model Quest {
+  id            Int      @id @default(autoincrement())
+  name          String   @unique
+  description   String   @default("")
+  objectives    Json     @default("[]")
+  rewards       Json     @default("{}")
+  prerequisites Json     @default("[]")
+  regionScoped  Boolean  @default(false)
+  repeatable    Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  metadata      Json?
 }
 
 // ─── WORLD STATE ─────────────────────────────────────────────────────────────

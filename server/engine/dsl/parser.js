@@ -5,11 +5,16 @@ const VALID_TRIGGERS = new Set([
   'on_enter', 'on_exit', 'on_use', 'on_tick', 'on_say',
   'on_give', 'on_take', 'on_attack', 'on_death',
   'on_time', 'on_condition_apply', 'on_condition_expire', 'on_event',
+  // Phase 3 additions
+  'on_craft', 'on_quest_accept', 'on_quest_complete',
+  'on_harvest', 'on_respawn',
 ]);
 
 const VALID_CONDITION_FNS = new Set([
   'has_condition', 'is_state', 'stat_above', 'stat_below',
   'has_item', 'in_state', 'user_type_is', 'zone_is', 'random_under',
+  // Phase 3 additions
+  'has_quest',
 ]);
 
 const VALID_ACTION_FNS = new Set([
@@ -27,6 +32,8 @@ const VALID_ACTION_FNS = new Set([
   'action_run',     // stub — Phase 2 implements
   'attack_target',  // stub — Phase 2 implements
   'end_combat',     // stub — Phase 2 implements
+  // Phase 3 additions
+  'grant_quest', 'complete_quest',
 ]);
 
 /**

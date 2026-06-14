@@ -34,6 +34,13 @@ on_event(name)
 
 Phase 2 adds triggers via: `VALID_TRIGGERS.add('trigger_name')` in parser.js
 
+## Phase 3 Trigger Vocabulary (added via `.add()`)
+
+```
+on_craft           on_quest_accept     on_quest_complete
+on_harvest         on_respawn
+```
+
 ## Phase 1 Condition Vocabulary
 
 ```
@@ -45,6 +52,12 @@ random_under(N)
 ```
 
 Phase 2 adds via: `VALID_CONDITION_FNS.add('fn_name')` in parser.js
+
+## Phase 3 Condition Vocabulary (added via `.add()`)
+
+```
+has_quest(questId, status)     -- true if avatar.quests[id].status === status
+```
 
 ## Phase 1 Action Vocabulary
 
@@ -61,7 +74,14 @@ destroy_instance(instance_id)
 ```
 
 Phase 2 adds via: `VALID_ACTION_FNS.add('fn_name')` in parser.js
-`create_instance` and `destroy_instance` are Phase 1 stubs — Phase 2 implements fully.
+`create_instance` and `destroy_instance` are **fully implemented in Phase 3** (no longer stubs).
+
+## Phase 3 Action Vocabulary (added via `.add()`)
+
+```
+grant_quest(avatarId, questId)       -- start quest progress on an avatar
+complete_quest(avatarId, questId)    -- dispatch rewards; sets turned_in
+```
 
 ## Script Execution Rules
 

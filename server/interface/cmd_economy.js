@@ -1,18 +1,22 @@
-// Economy commands: coins/balance (readout), buy/sell (phase 3), vendor (builder), trade (stub).
+// Economy commands: coins/balance (readout), buy/sell (phase 3), vendor (builder), trade escrow.
 import { registerCommand } from './commands.js';
 import { registerPanelRoute } from './panels.js';
 import { renderOutput } from './output.js';
 import { db } from '../db/postgres.js';
 import { redis } from '../db/redis.js';
 import { enqueueAction } from '../tick/queue.js';
+import { tradeKey } from '../engine/trade.js';
 import { logger } from '../log/logger.js';
 
 export function register() {
-  registerCommand('coins',  handleCoins,  { aliases: ['balance'], minUserType: 'CHARACTER',  group: 'economy', description: 'Show your coin count' });
-  registerCommand('buy',    handleBuy,    {                       minUserType: 'CHARACTER',  group: 'economy', description: 'Buy from a vendor' });
-  registerCommand('sell',   handleSell,   {                       minUserType: 'CHARACTER',  group: 'economy', description: 'Sell to a vendor' });
-  registerCommand('vendor', handleVendor, {                       minUserType: 'POWER_USER', group: 'world',   description: 'Configure a vendor instance' });
-  registerCommand('trade',  handleTrade,  {                       minUserType: 'CHARACTER',  group: 'economy', description: 'Trade with another player' });
+  registerCommand('coins',   handleCoins,        { aliases: ['balance'], minUserType: 'CHARACTER',  group: 'economy', description: 'Show your coin count' });
+  registerCommand('buy',     handleBuy,          {                       minUserType: 'CHARACTER',  group: 'economy', description: 'Buy from a vendor' });
+  registerCommand('sell',    handleSell,         {                       minUserType: 'CHARACTER',  group: 'economy', description: 'Sell to a vendor' });
+  registerCommand('vendor',  handleVendor,       {                       minUserType: 'POWER_USER', group: 'world',   description: 'Configure a vendor instance' });
+  registerCommand('trade',   handleTrade,        {                       minUserType: 'CHARACTER',  group: 'economy', description: 'Open a trade with another player' });
+  registerCommand('offer',   handleOffer,        {                       minUserType: 'CHARACTER',  group: 'economy', description: 'Offer an item or coins in a trade' });
+  registerCommand('confirm', handleTradeConfirm, {                       minUserType: 'CHARACTER',  group: 'economy', description: 'Confirm the current trade' });
+  registerCommand('cancel',  handleTradeCancel,  {                       minUserType: 'CHARACTER',  group: 'economy', description: 'Cancel the current trade' });
 
   registerPanelRoute('vendor_config', handleVendorConfigSubmit);
 }
@@ -256,10 +260,177 @@ async function _saveVendorState(inst, vendorState) {
   });
 }
 
-// ─── TRADE (stub — escrow not yet implemented) ───────────────────────────────
+// ─── TRADE ESCROW ─────────────────────────────────────────────────────────────
+
+async function _getAvatarEscrowKey(avatarId) {
+  const keys = await redis.keys('trade:*');
+  for (const k of keys) {
+    const raw = await redis.get(k);
+    if (!raw) continue;
+    const e = JSON.parse(raw);
+    if (e.a?.avatarId === avatarId || e.b?.avatarId === avatarId) return k;
+  }
+  return null;
+}
+
+async function _getAvatarEscrow(avatarId) {
+  const key = await _getAvatarEscrowKey(avatarId);
+  if (!key) return null;
+  const raw = await redis.get(key);
+  return raw ? { key, escrow: JSON.parse(raw) } : null;
+}
+
+function _mySide(escrow, avatarId) {
+  return escrow.a.avatarId === avatarId ? 'a' : 'b';
+}
+
+function _otherSide(side) { return side === 'a' ? 'b' : 'a'; }
 
 async function handleTrade(ctx) {
-  return { output: renderOutput('[color=yellow]Trade escrow is not yet implemented.[/]') };
+  if (!ctx.avatarId || !ctx.regionId) return { output: renderOutput('[color=red]No active avatar.[/]') };
+
+  const parts = ctx.raw.trim().split(/\s+/);
+  const targetArg = (parts[1] ?? '').replace(/^@/, '');
+  if (!targetArg) return { output: renderOutput('[b]Usage:[/] trade @player') };
+
+  // Check if already in a trade
+  if (await _getAvatarEscrowKey(ctx.avatarId)) {
+    return { output: renderOutput('[color=red]You are already in a trade. Use cancel first.[/]') };
+  }
+
+  // Resolve target avatar co-located
+  const targetAv = await db.avatar.findFirst({
+    where: { name: { equals: targetArg, mode: 'insensitive' }, isActive: true, regionId: ctx.regionId, locationId: ctx.locationId },
+    select: { id: true, name: true, userId: true },
+  });
+  if (!targetAv) return { output: renderOutput(`[color=red]'${esc(targetArg)}' is not here.[/]`) };
+  if (targetAv.id === ctx.avatarId) return { output: renderOutput('[color=red]You cannot trade with yourself.[/]') };
+
+  // Check if target already in a trade
+  if (await _getAvatarEscrowKey(targetAv.id)) {
+    return { output: renderOutput(`[color=red]${esc(targetAv.name)} is already in a trade.[/]`) };
+  }
+
+  const targetUser = await db.user.findUnique({ where: { id: targetAv.userId }, select: { sessionToken: true } });
+  const key = tradeKey(ctx.avatarId, targetAv.id);
+  const [sideA, sideB] = ctx.avatarId < targetAv.id
+    ? [{ avatarId: ctx.avatarId, sessionToken: ctx.sessionToken, items: [], coins: 0, confirmed: false },
+       { avatarId: targetAv.id, sessionToken: targetUser?.sessionToken ?? null, items: [], coins: 0, confirmed: false }]
+    : [{ avatarId: targetAv.id, sessionToken: targetUser?.sessionToken ?? null, items: [], coins: 0, confirmed: false },
+       { avatarId: ctx.avatarId, sessionToken: ctx.sessionToken, items: [], coins: 0, confirmed: false }];
+
+  const escrow = { a: sideA, b: sideB, openedTick: 0, regionId: ctx.regionId, locationId: ctx.locationId };
+  await redis.set(key, JSON.stringify(escrow));
+
+  // Read currentTick from Redis for the timeout
+  const tickRaw = await redis.get('world:tickCount');
+  escrow.openedTick = tickRaw ? parseInt(tickRaw) : 0;
+  await redis.set(key, JSON.stringify(escrow));
+
+  const msg = renderOutput(`[color=green]A trade window is open with [b]${esc(targetAv.name)}[/]. Use [b]offer[/], [b]confirm[/], or [b]cancel[/].[/]`);
+  const targetMsg = renderOutput(`[color=green][b]${esc(ctx.avatarName ?? 'Someone')}[/] has opened a trade with you. Use [b]offer[/], [b]confirm[/], or [b]cancel[/].[/]`);
+  if (targetUser?.sessionToken) {
+    // Best-effort: we can't sendOutput from here (not in worker thread); relay via output field
+  }
+  logger.info('TRADE', 'Trade opened', { key, avatarA: ctx.avatarId, avatarB: targetAv.id });
+  return { output: msg };
+}
+
+async function handleOffer(ctx) {
+  if (!ctx.avatarId) return { output: renderOutput('[color=red]No active avatar.[/]') };
+  const result = await _getAvatarEscrow(ctx.avatarId);
+  if (!result) return { output: renderOutput('[color=red]You are not in a trade.[/]') };
+  const { key, escrow } = result;
+  const mySide = _mySide(escrow, ctx.avatarId);
+  const party = escrow[mySide];
+
+  const parts = ctx.raw.trim().split(/\s+/);
+  // offer {N} coins   or   offer $instId
+  if (parts.length < 2) return { output: renderOutput('[b]Usage:[/] offer $item | offer {N} coins') };
+
+  const isCoins = parts[parts.length - 1]?.toLowerCase() === 'coins';
+  if (isCoins) {
+    const amount = parseInt(parts[1]);
+    if (isNaN(amount) || amount < 0) return { output: renderOutput('[color=red]Invalid coin amount.[/]') };
+    party.coins = amount;
+    // Any change invalidates both confirmations
+    escrow.a.confirmed = false;
+    escrow.b.confirmed = false;
+    await redis.set(key, JSON.stringify(escrow));
+    return { output: renderOutput(`You offer [b]${amount}[/] coins.`) };
+  }
+
+  // Offer an item
+  const instArg = parts[1];
+  const instId = parseInt(instArg.replace(/^[$#]/, ''));
+  if (isNaN(instId)) return { output: renderOutput('[b]Usage:[/] offer $instId | offer {N} coins') };
+
+  // Verify the item is in the avatar's inventory
+  const inst = await db.objectInstance.findFirst({
+    where: { id: instId, ownerType: 'AVATAR', ownerId: String(ctx.avatarId) },
+    include: { template: { select: { name: true } } },
+  });
+  if (!inst) return { output: renderOutput(`[color=red]You are not carrying $${instId}.[/]`) };
+
+  // Move to ESCROW
+  await db.objectInstance.update({
+    where: { regionId_id: { regionId: inst.regionId, id: inst.id } },
+    data: { ownerType: 'ESCROW', ownerId: key },
+  });
+  party.items = [...(party.items ?? []), inst.id];
+  escrow.a.confirmed = false;
+  escrow.b.confirmed = false;
+  await redis.set(key, JSON.stringify(escrow));
+  return { output: renderOutput(`You offer [b]${esc(inst.template?.name ?? `item ${instId}`)}[/].`) };
+}
+
+async function handleTradeConfirm(ctx) {
+  if (!ctx.avatarId) return { output: renderOutput('[color=red]No active avatar.[/]') };
+  const result = await _getAvatarEscrow(ctx.avatarId);
+  if (!result) return { output: renderOutput('[color=red]You are not in a trade.[/]') };
+  const { key, escrow } = result;
+  const mySide = _mySide(escrow, ctx.avatarId);
+
+  escrow[mySide].confirmed = true;
+  await redis.set(key, JSON.stringify(escrow));
+
+  if (escrow.a.confirmed && escrow.b.confirmed) {
+    // Both confirmed: enqueue atomic transfer in phase 3
+    await enqueueAction({
+      phase: 3, category: 'trade_confirm',
+      resourceKey: null,
+      sessionToken: ctx.sessionToken,
+      context: { tradeKey: key, actorAvatarId: ctx.avatarId },
+    });
+    return { output: renderOutput('[color=green]Both parties confirmed. Completing trade...[/]') };
+  }
+
+  return { output: renderOutput('[color=green]You confirmed the trade. Waiting for the other party...[/]') };
+}
+
+async function handleTradeCancel(ctx) {
+  if (!ctx.avatarId) return { output: renderOutput('[color=red]No active avatar.[/]') };
+  const result = await _getAvatarEscrow(ctx.avatarId);
+  if (!result) return { output: renderOutput('[color=red]You are not in a trade.[/]') };
+  const { key, escrow } = result;
+
+  // Return ESCROW-held items to their owners
+  for (const side of ['a', 'b']) {
+    const party = escrow[side];
+    for (const instanceId of (party.items ?? [])) {
+      try {
+        await db.objectInstance.updateMany({
+          where: { ownerType: 'ESCROW', ownerId: key, id: instanceId },
+          data: { ownerType: 'AVATAR', ownerId: String(party.avatarId) },
+        });
+      } catch (e) {
+        logger.warn('TRADE', 'Item return failed on cancel', { instanceId, error: e.message });
+      }
+    }
+  }
+  await redis.del(key);
+  logger.info('TRADE', 'Trade cancelled by avatar', { key, avatarId: ctx.avatarId });
+  return { output: renderOutput('[color=yellow]Trade cancelled. Your items have been returned.[/]') };
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

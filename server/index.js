@@ -13,6 +13,8 @@ import { register as registerBuilder } from './interface/cmd_builder.js';
 import { register as registerEconomy } from './interface/cmd_economy.js';
 import { register as registerAdmin } from './interface/cmd_admin.js';
 import { register as registerAccount } from './interface/cmd_account.js';
+import { register as registerCrafting } from './interface/cmd_crafting.js';
+import { register as registerQuests } from './interface/cmd_quest.js';
 import { registerPanelHandlers } from './interface/panels.js';
 import { logger } from './log/logger.js';
 
@@ -22,6 +24,12 @@ async function main() {
   await initDb();
   await initRedis();
   registerBuiltins();
+
+  // ─── REGISTRATION-SITE RULE ────────────────────────────────────────────────
+  // This file (main thread) registers COMMAND MODULES only via register().
+  // registerSystemHandler and registerMaintenanceTask belong in server/tick/engine.js
+  // (the worker thread). Never call those functions here.
+  // ───────────────────────────────────────────────────────────────────────────
 
   // Phase 2 command registrations (order matters for alias resolution)
   registerCreation();
@@ -33,6 +41,8 @@ async function main() {
   registerEconomy();
   registerAdmin();
   registerAccount();
+  registerCrafting();
+  registerQuests();
   registerPanelHandlers();
 
   const { sessions } = startWsServer(config.port);
