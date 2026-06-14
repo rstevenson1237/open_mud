@@ -155,6 +155,16 @@ async function _evalCondition(cond, context, vars) {
       const visited = entity?.visitedRegions ?? [];
       return visited.includes(parseInt(cond.args[0]));
     }
+    case 'has_quest': {
+      // has_quest(questId, status) — true if avatar.quests[id].status === status
+      const [questId, status] = cond.args;
+      if (!context.actorAvatarId) return false;
+      const avRaw = await redis.get(`avatar:${context.actorAvatarId}`);
+      if (!avRaw) return false;
+      const avatar = JSON.parse(avRaw);
+      const entry = (avatar.quests ?? {})[String(questId)];
+      return entry?.status === status;
+    }
     default:
       logger.warn('STATE_MACHINE', 'Unknown condition function', { fn: cond.fn });
       return false;
@@ -275,6 +285,17 @@ async function _execActions(actions, context, vars, budget, emitOutput, emitEven
           if (!condsMet) continue;
           budget.transitions--;
           await _execActions(rule.actions, context, vars, budget, emitOutput, emitEvent, scriptId, subroutines);
+        }
+        break;
+      }
+      case 'grant_quest':
+      case 'complete_quest': {
+        // Forwarded to the quest engine dynamically to avoid circular imports
+        try {
+          const { questActionDispatch } = await import('./quests.js');
+          await questActionDispatch(resolvedAction.fn, resolvedAction.args, context, emitOutput, emitEvent);
+        } catch (e) {
+          logger.warn('STATE_MACHINE', `${resolvedAction.fn} failed`, { error: e.message, scriptId });
         }
         break;
       }
