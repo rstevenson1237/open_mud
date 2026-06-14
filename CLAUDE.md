@@ -107,7 +107,21 @@ Critical ones: `DATABASE_URL`, `REDIS_URL`, `PORT=3000`, `TICK_MS=6000`.
   inventory, combat (with horror/sanity), survival, mobs (AI + kill handler),
   economy (purchase/sale). POST /upload/script endpoint. Conditions library seeded.
   DB column whitelist for hot-state flush. Session editBuffer for multiline DSL editor.
-- **Phase 3** — Content building and delivery. NOT STARTED.
+- **Phase 3** — Content systems, economy loop & playtest harness. COMPLETE.
+  Hardening: per-script target context, structural script save, real
+  create/destroy_instance, single trade command, reactive quest hook.
+  Systems: trade escrow (10-tick timeout reaper), crafting (Recipe table + craft
+  command), quests (Quest table + avatar.quests, reactive hook), resource nodes
+  (harvest + respawn maintenance), Redis instance-id allocator.
+  DSL vocab: on_craft, on_quest_accept, on_quest_complete, on_harvest, on_respawn;
+  has_quest condition; grant_quest, complete_quest actions.
+  Content: Test Vale seed (region 100, 6 locations, 12 exits, 10 instances, 3 scripts),
+  builder walkthrough (docs/phase3_walkthrough.md),
+  playtest checklist (docs/phase3_playtest_checklist.md).
+  Commands: craft, recipes, harvest, quests, quest accept, quest turn-in, trade,
+  offer, confirm, cancel; builder: build quest, build recipe.
+  Seed scripts: prisma/seed/recipes.js, prisma/seed/quests.js, prisma/seed/test_vale.js.
+  Run order: conditions → skills → world_config → recipes → quests → test_vale.
 - **Phase 4** — Future stubs. NOT STARTED.
 
 Update this section as phases complete.
