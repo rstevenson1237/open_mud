@@ -15,9 +15,15 @@ import { config } from '../config.js';
  * @param {Function} emitEvent     function(entityType, entityId, eventName, data)
  */
 export async function runTrigger(trigger, context, emitOutput, emitEvent) {
-  const scripts = await _loadScriptsForContext(context);
+  const entries = await _loadScriptsForContext(context);
 
-  for (const script of scripts) {
+  for (const entry of entries) {
+    const script = entry.script;
+    // Each script runs under a context that knows which entity owns it,
+    // so is_state/set_state resolve against the owner (instance, location, region)
+    // rather than defaulting to the actor avatar. actorAvatarId is preserved.
+    const scriptContext = { ...context, ...entry.target };
+
     const budget = {
       transitions: script.maxTransitions ?? config.scriptMaxTransitions,
       events: script.maxEvents ?? config.scriptMaxEvents,
@@ -35,17 +41,21 @@ export async function runTrigger(trigger, context, emitOutput, emitEvent) {
         break;
       }
 
-      const conditionsMet = await _evalConditions(rule.conditions, context, vars);
+      const conditionsMet = await _evalConditions(rule.conditions, scriptContext, vars);
       if (!conditionsMet) continue;
 
       budget.transitions--;
-      await _execActions(rule.actions, context, vars, budget, emitOutput, emitEvent, script.id, subroutines);
+      await _execActions(rule.actions, scriptContext, vars, budget, emitOutput, emitEvent, script.id, subroutines);
     }
   }
 }
 
+// Returns [{ script, target }] where target augments the context for each script:
+//   location script → { targetType: 'location', targetId: '${regionId}:${locationId}' }
+//   instance script → { targetType: 'instance', targetId: '${regionId}:${instanceId}' }
+// This lets is_state/set_state resolve against the owning entity, not the actor.
 async function _loadScriptsForContext(context) {
-  const scripts = [];
+  const entries = [];
 
   if (context.regionId != null && context.locationId != null) {
     const loc = await db.location.findUnique({
@@ -54,23 +64,29 @@ async function _loadScriptsForContext(context) {
     });
     if (loc?.scriptId) {
       const s = await db.script.findUnique({ where: { id: loc.scriptId } });
-      if (s) scripts.push(s);
+      if (s) entries.push({
+        script: s,
+        target: { targetType: 'location', targetId: `${context.regionId}:${context.locationId}` },
+      });
     }
 
     const instances = await db.objectInstance.findMany({
       where: { regionId: context.regionId, ownerType: 'LOCATION', ownerId: String(context.locationId) },
-      select: { templateId: true },
+      select: { id: true, regionId: true, templateId: true },
     });
     for (const inst of instances) {
       const tmpl = await db.objectTemplate.findUnique({ where: { id: inst.templateId }, select: { scriptId: true } });
       if (tmpl?.scriptId) {
         const s = await db.script.findUnique({ where: { id: tmpl.scriptId } });
-        if (s) scripts.push(s);
+        if (s) entries.push({
+          script: s,
+          target: { targetType: 'instance', targetId: `${inst.regionId ?? 'null'}:${inst.id}` },
+        });
       }
     }
   }
 
-  return scripts;
+  return entries;
 }
 
 async function _evalConditions(conditions, context, vars) {
@@ -317,15 +333,33 @@ async function _loadStructural(type, targetId) {
   return null;
 }
 
-/**
- * Save a structural entity back to Postgres.
- * Phase 2 builder commands add mutable fields (isState etc.) to structural entities.
- * Until then this is a best-effort no-op (structural entities have no mutable hot-state).
- */
+// Fields that DSL scripts may write on structural entities.
+// config is builder-only and is intentionally excluded.
+const LOCATION_WRITABLE = ['isState', 'description', 'name'];
+const EXIT_WRITABLE = ['isState'];
+
+function pickStructural(obj, cols) {
+  return Object.fromEntries(cols.filter(c => c in obj).map(c => [c, obj[c]]));
+}
+
 async function _saveStructural(type, targetId, entity) {
-  // Structural writes require knowing which fields changed (Phase 2 builder adds isState).
-  // Log for now; Phase 2 builder commands will call DB directly via their own handlers.
-  logger.warn('STATE_MACHINE', 'Structural entity save not yet implemented', { type, targetId });
+  const parts = String(targetId).split(':');
+  if (type === 'location' && parts.length >= 2) {
+    await db.location.update({
+      where: { regionId_id: { regionId: parseInt(parts[0]), id: parseInt(parts[1]) } },
+      data: pickStructural(entity, LOCATION_WRITABLE),
+    });
+    return;
+  }
+  if (type === 'exit' && parts.length >= 2) {
+    await db.exit.update({
+      where: { regionId_id: { regionId: parseInt(parts[0]), id: parseInt(parts[1]) } },
+      data: pickStructural(entity, EXIT_WRITABLE),
+    });
+    return;
+  }
+  // region: scripts may not mutate region rows (builder-only). Log and skip.
+  logger.warn('STATE_MACHINE', 'Structural save skipped (not script-writable)', { type, targetId });
 }
 
 function _sanitize(text) {
