@@ -1,5 +1,5 @@
 // Inventory commands: get/take, drop, give, i/inventory, examine/x,
-//   open/close, put/take-from, use, wear/equip/remove, trade stub
+//   open/close, put/take-from, use, wear/equip/remove
 import { registerCommand } from './commands.js';
 import { renderOutput } from './output.js';
 import { enqueueAction } from '../tick/queue.js';
@@ -19,7 +19,6 @@ export function register() {
   registerCommand('use',       handleUse,        { aliases: [],        minUserType: 'CHARACTER', group: 'inventory', description: 'Use an item' });
   registerCommand('wear',      handleWear,       { aliases: ['equip'], minUserType: 'CHARACTER', group: 'inventory', description: 'Equip an item' });
   registerCommand('remove',    handleRemove,     { aliases: [],        minUserType: 'CHARACTER', group: 'inventory', description: 'Unequip an item' });
-  registerCommand('trade',     handleTrade,      { aliases: [],        minUserType: 'CHARACTER', group: 'inventory', description: 'Trade with another player' });
 }
 
 // ---------------------------------------------------------------------------
@@ -460,14 +459,6 @@ async function handleRemove(ctx) {
     },
   });
   return { output: null };
-}
-
-// ---------------------------------------------------------------------------
-// trade stub
-// ---------------------------------------------------------------------------
-
-async function handleTrade(ctx) {
-  return { output: renderOutput('[color=yellow]Trade (escrow) not yet implemented (TASK 15).[/]') };
 }
 
 function _esc(t) {
